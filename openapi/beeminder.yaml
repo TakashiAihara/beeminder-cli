@@ -67,10 +67,12 @@ paths:
         - name: emaciated
           in: query
           required: false
-          description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from any goal objects returned with the user.
+          description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from any goal objects returned with the user. The reference words this as presence-based ("If included"), so send `emaciated=true` or omit it; do not send `emaciated=false`.
           schema:
             type: boolean
             default: false
+          x-unverified: true
+          x-unverified-note: The reference says "If included" (presence-based) but also gives "Default false"; it does not state whether an explicit `false` is honored.
         - name: datapoints_count
           in: query
           required: false
@@ -84,14 +86,21 @@ paths:
           schema:
             type: string
           x-unverified: true
-          x-unverified-note: The reference does not say what response (status code, body) is returned when this parameter is used, nor whether it can be combined with the other parameters.
+          x-unverified-note: The reference says the user is redirected but gives neither the 3xx status code nor the response body, and does not say whether this can be combined with the other parameters.
       responses:
         '200':
-          description: A User object.
+          description: A User object (normal case, without `redirect_to_url`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
+        3XX:
+          description: Returned instead of a User object when `redirect_to_url` is given and authentication succeeds; redirects to that URL. The reference does not give the exact status code, so a 3XX range is used.
+          headers:
+            Location:
+              description: The `redirect_to_url` value.
+              schema:
+                type: string
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals.json:
@@ -119,7 +128,7 @@ paths:
       tags: [goals]
       summary: Create a goal for a user
       description: |
-        Create a new goal for the user. Exactly two out of three of `goaldate`, `goalval` and `rate` are required.
+        Create a new goal for the user. Rule: exactly two out of three of `goaldate`, `goalval` and `rate` are required (the reference's example sends the unused one as `null`); sending fewer or more than two is invalid.
 
         If you pass your API client's registered name as `datasource` and your client has a registered `autofetch_callback_url`, Beeminder POSTs to your callback when the goal wants new data.
       parameters:
@@ -235,6 +244,7 @@ paths:
       description: |
         Update the user's goal with slug `slug`. Similar to goal creation, but `goal_type` cannot be changed.
         To change any of `goaldate`, `goalval`, `rate`, use `roadall`.
+        The `roadall` note about changing rate units in the same call implies `runits` can be sent here, but the reference does not list `runits` as a parameter of this endpoint (or of goal creation), so it is not modelled.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -327,7 +337,7 @@ paths:
       description: |
         Deprecated in favor of `roadall` on goal update.
         Changes the slope of the bright red line, starting after the one-week akrasia horizon.
-        Exactly two of `goaldate`, `goalval` and `rate` should be specified; setting two implies the third.
+        Rule: exactly two of `goaldate`, `goalval` and `rate` should be specified; setting two implies the third (the reference's example sends the unused one as `null`).
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -419,7 +429,7 @@ paths:
         This endpoint charges real money: it charges the user and all Groupies of the goal immediately. There are no takebacks, no undos and no refunds.
       x-charges-money: true
       x-unverified: true
-      x-unverified-note: The curl example in the reference omits `-X POST` (it would be a GET), while the HTTP Request line says POST. POST is used here.
+      x-unverified-note: The reference's curl example has neither `-X POST` nor any `-d` data, so as written it would be a GET, while the HTTP Request line says POST. POST is used here per the HTTP Request line.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -444,6 +454,8 @@ paths:
         - Do Less / Whittle Down goals: `newsafety` is the number of units of buffer (distance, in the goal's units, between the current total and the bright red line). It is relative to the bright red line, not the absolute hard-cap total.
 
         If the goal is on a flat spot (e.g. a scheduled break starting tomorrow), `newsafety` is clamped to a minimum of 1 day; the request still returns 200 but the resulting buffer may be larger than requested.
+
+        Rule: when `newsafety` is 0, `beemergency` must also be sent as `true`, otherwise the request fails with an error.
 
         Documented error messages (returned in the `errors` field): "newsafety parameter is required", "newsafety must be a number", "newsafety cannot be negative", "newsafety cannot exceed X", "Ratcheting to 0 days of buffer requires beemergency=True on the API call", "Goal cannot be ratcheted because it is non-monotonic in the next N days", "Goal cannot be ratcheted (may be archived, ended, or have no buffer)", "Failed to ratchet goal".
       parameters:
@@ -571,11 +583,12 @@ paths:
               properties:
                 datapoints:
                   type: array
-                  description: Array of datapoint objects (see DatapointInput), each with at least `value`. In the reference's curl example this is sent as a JSON-encoded array in a single form field.
+                  description: Array of datapoint objects (see DatapointInput), each with at least `value`. Sent as a single form field whose value is the JSON-encoded array, as in the reference's curl example (`-d datapoints=[{"timestamp":...,"value":...}, ...]`).
                   items:
                     $ref: '#/components/schemas/DatapointInput'
-                  x-unverified: true
-                  x-unverified-note: The reference says "Each Datapoint should be a JSON object" and shows a JSON array string in a `-d` form field; the exact wire encoding is not specified.
+            encoding:
+              datapoints:
+                contentType: application/json
       responses:
         '200':
           description: A list of successfully created Datapoints, or, in the case of any errors, an object with two lists `successes` and `errors`.
@@ -587,6 +600,7 @@ paths:
                     items:
                       $ref: '#/components/schemas/Datapoint'
                   - type: object
+                    required: [successes, errors]
                     properties:
                       successes:
                         type: array
@@ -682,14 +696,18 @@ paths:
                   x-unverified-note: Listed as a plain (not bracketed/optional) parameter, yet the text says "optionally add a note". Treated as optional.
                 dryrun:
                   type: string
-                  description: If passed, the Charge is not actually created, but its JSON is returned as if it were. Default false.
+                  description: If passed, the Charge is not actually created, but its JSON is returned as if it were. Default false. The reference types this parameter as a string (unlike goal creation's `dryrun`, which it types as a boolean).
       responses:
         '200':
           description: The Charge object. If the request was not successful, an object with the error message(s) instead.
+          x-unverified: true
+          x-unverified-note: The reference does not say whether a failed charge returns 200 or an error status, so the 200 body may be either shape. Check for `errors` before reading it as a Charge.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Charge'
+                anyOf:
+                  - $ref: '#/components/schemas/Charge'
+                  - $ref: '#/components/schemas/Error'
         default:
           $ref: '#/components/responses/Error'
 components:
@@ -737,10 +755,12 @@ components:
       name: emaciated
       in: query
       required: false
-      description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from the returned goal objects.
+      description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from the returned goal objects. The reference words this as presence-based ("If included"), so send `emaciated=true` or omit it; do not send `emaciated=false`.
       schema:
         type: boolean
         default: false
+      x-unverified: true
+      x-unverified-note: The reference says "If included" (presence-based) but also gives "Default false"; it does not state whether an explicit `false` is honored.
   responses:
     Error:
       description: Error. The reference documents the body shape only by example, and does not document HTTP status codes.
@@ -754,6 +774,8 @@ components:
       description: 'Error body, e.g. {"errors": "Can''t uncle a goal that''s not in the red."}.'
       x-unverified: true
       x-unverified-note: Only string-valued `errors` appear in the examples. For charges the reference says "an object with the error message(s)", so other shapes may exist. HTTP status codes for errors are not documented.
+      required:
+        - errors
       properties:
         errors:
           type: string
@@ -766,6 +788,8 @@ components:
       enum: [hustler, biker, fatloser, gainer, inboxer, drinker, custom]
     User:
       type: object
+      description: '`required` lists the attribute that appears in every User example in the reference; the reference does not explicitly state which attributes are always returned.'
+      required: [username]
       properties:
         username:
           type: string
@@ -776,7 +800,8 @@ components:
           description: Unix timestamp (seconds) of the last update to this user or any of their goals or datapoints.
         goals:
           description: A list of slugs for each of the user's goals, or an array of goal objects if `diff_since` or `associations` is sent.
-          oneOf:
+          # anyOf, not oneOf: an empty list matches both branches and must stay valid.
+          anyOf:
             - type: array
               items:
                 type: string
@@ -794,6 +819,8 @@ components:
           description: Only returned if `diff_since` is sent. Each item has one key/value pair for the id of the deleted goal.
           items:
             type: object
+            description: 'A hash with one key/value pair, the id of the deleted goal (the reference''s example is `{"id": "519279fd86f33468ne"}`).'
+            required: [id]
             properties:
               id:
                 type: string
@@ -802,6 +829,8 @@ components:
       description: |
         Everything about a specific goal. One of `goaldate`, `goalval` and `rate` is null, meaning it is calculated from the other two.
         Many attributes (including `mathishard`, `lane`, `delta`, `limsum`, `safebump`, `safebuf`, `initday`, `initval`, `curday`, `curval`, `currate`, `fullroad`, `headsum`, `graphsum`, `rah`, "and others") may be null if the goal is in an error state such that the graph cannot be generated, or if the goal is frozen. The reference does not list the "others", so only the named attributes are marked nullable.
+        `required` lists the one attribute (`slug`) that appears in every Goal example in the reference, including the `skinny` subset; the reference does not explicitly state which attributes are always returned.
+      required: [slug]
       properties:
         slug:
           type: string
@@ -976,11 +1005,11 @@ components:
               type: [number, 'null']
         fullroad:
           type: [array, 'null']
-          description: Like `roadall` but with the nulls filled in.
+          description: Like `roadall` but with the nulls filled in, so rows contain no nulls. The whole attribute may be null if the goal is in an error state.
           items:
             type: array
             items:
-              type: [number, 'null']
+              type: number
         rah:
           type: [number, 'null']
           description: Red line value (y-value of the bright red line) at the akrasia horizon (today plus one week).
@@ -1075,6 +1104,8 @@ components:
           description: Unix timestamp (seconds) at which the goal will be archived. Null if already archived or not scheduled for archive. May be in the past if archival is due or in flight.
     Datapoint:
       type: object
+      description: '`required` lists the attributes that appear in every Datapoint example in the reference; the reference does not explicitly state which attributes are always returned.'
+      required: [id, timestamp, value]
       properties:
         id:
           type: string
@@ -1133,6 +1164,8 @@ components:
           description: String uniquely identifying this datapoint (scoped to this goal), used as an idempotency key so clients can safely resend datapoints.
     Charge:
       type: object
+      description: '`required` lists the documented Charge attributes that also appear in the reference example (`note` is excluded because it is optional on creation).'
+      required: [amount, username]
       properties:
         id:
           type: string
