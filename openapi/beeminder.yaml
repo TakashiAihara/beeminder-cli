@@ -1,0 +1,1149 @@
+openapi: 3.1.0
+info:
+  title: Beeminder API
+  version: v1
+  description: |
+    Beeminder API v1, written from the official API reference (Slate markdown) only.
+
+    Conventions taken from the reference:
+    - Every endpoint requires authentication (see `securitySchemes`).
+    - `username` may be the literal `me`, which is expanded to the authorized user.
+    - Use exactly the base URL below. Beeminder redirects `http` and non-`www` requests but does not forward parameters for POST requests.
+    - Timestamps are Unix time in seconds.
+
+    `x-unverified: true` marks places where the reference is ambiguous or inconsistent; each carries an `x-unverified-note` saying why.
+  x-source: Beeminder API Reference (official apidocs, Slate markdown)
+servers:
+  - url: https://www.beeminder.com/api/v1
+    description: Canonical base URL. Do not use http:// or a non-www host; POST parameters are lost on redirect.
+tags:
+  - name: users
+    description: User resource.
+  - name: goals
+    description: Goal resource and goal actions.
+  - name: datapoints
+    description: Datapoint resource.
+  - name: charges
+    description: Charge resource. Creating charges bills real money.
+security:
+  - authToken: []
+  - accessTokenQuery: []
+  - accessTokenBearer: []
+paths:
+  /users/{username}.json:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get information about a user
+      description: |
+        Retrieves information and a list of goal slugs for the user with username `username`.
+        Because an access token uniquely identifies a user, `me` may be used instead of the username.
+
+        Use `updated_at` to avoid unnecessary requests: it changes whenever the user, any of their goals, or any datapoint changes.
+
+        The same path and method also serves "Authenticate and redirect the user": when `redirect_to_url` is given, Beeminder attempts to authenticate the user and, if successful, redirects to that URL.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - name: associations
+          in: query
+          required: false
+          description: Convenience method to fetch all information about a user. Send `true` to receive all of the user's goals and datapoints as attributes of the user object. Use sparingly; see also `diff_since`.
+          schema:
+            type: boolean
+            default: false
+        - name: diff_since
+          in: query
+          required: false
+          description: Unix timestamp in seconds. Only goals and datapoints created or updated since the timestamp are returned. Implies `associations`. Default null returns all goals and datapoints.
+          schema:
+            type: number
+        - name: skinny
+          in: query
+          required: false
+          description: Only get a subset of goal attributes and the most recent datapoint (as `last_datapoint`, replacing `datapoints`). Must be sent along with `diff_since`; ignored otherwise. The subset is `slug, title, description, goalval, rate, goaldate, svg_url, graph_url, thumb_url, goal_type, autodata, losedate, urgencykey, deadline, leadtime, alertstart, id, queued, updated_at, burner, yaw, lane, delta, runits, limsum, frozen, lost, won, contract, delta_text, safebump, gunits, todayta, timey, hhmmformat`.
+          schema:
+            type: boolean
+            default: false
+        - name: emaciated
+          in: query
+          required: false
+          description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from any goal objects returned with the user.
+          schema:
+            type: boolean
+            default: false
+        - name: datapoints_count
+          in: query
+          required: false
+          description: Only receive the `n` most recently added datapoints, sorted by `updated_at` (a datapoint with an old timestamp that was added recently sorts as recent). Default null returns all datapoints.
+          schema:
+            type: number
+        - name: redirect_to_url
+          in: query
+          required: false
+          description: URL to redirect the user to after authenticating them. Lets third-party apps send the user to a part of the website without a login screen.
+          schema:
+            type: string
+          x-unverified: true
+          x-unverified-note: The reference does not say what response (status code, body) is returned when this parameter is used, nor whether it can be combined with the other parameters.
+      responses:
+        '200':
+          description: A User object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals.json:
+    get:
+      operationId: listGoals
+      tags: [goals]
+      summary: Get all goals for a user
+      description: Get the user's list of goals, sorted in descending order of urgency (increasing order of time to derailment).
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/Emaciated'
+      responses:
+        '200':
+          description: A list of Goal objects.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createGoal
+      tags: [goals]
+      summary: Create a goal for a user
+      description: |
+        Create a new goal for the user. Exactly two out of three of `goaldate`, `goalval` and `rate` are required.
+
+        If you pass your API client's registered name as `datasource` and your client has a registered `autofetch_callback_url`, Beeminder POSTs to your callback when the goal wants new data.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [slug, title, goal_type, gunits]
+              properties:
+                slug:
+                  type: string
+                  description: The final part of the goal URL, used as an identifier.
+                title:
+                  type: string
+                goal_type:
+                  $ref: '#/components/schemas/GoalType'
+                gunits:
+                  type: string
+                  description: Goal units, like "hours" or "pushups" or "pages".
+                goaldate:
+                  type: [number, 'null']
+                  description: Unix timestamp (seconds) of the goal date. Exactly two of `goaldate`, `goalval`, `rate` must be non-null.
+                goalval:
+                  type: [number, 'null']
+                  description: Goal value. Exactly two of `goaldate`, `goalval`, `rate` must be non-null.
+                rate:
+                  type: [number, 'null']
+                  description: Slope of the bright red line (with `runits`). Exactly two of `goaldate`, `goalval`, `rate` must be non-null.
+                initval:
+                  type: number
+                  default: 0
+                  description: Initial value for today's date.
+                secret:
+                  type: boolean
+                datapublic:
+                  type: boolean
+                datasource:
+                  type: string
+                  description: 'One of "api", "ifttt", "zapier", or a registered client name. Default: none (manual).'
+                dryrun:
+                  type: boolean
+                  default: false
+                  description: Pass this to test the endpoint without actually creating a goal.
+                tags:
+                  type: array
+                  description: Optional list of tags to add to the new goal. Each tag must be an alphanumeric string.
+                  items:
+                    type: string
+                    pattern: '^[A-Za-z0-9]+$'
+                  x-unverified: true
+                  x-unverified-note: The reference does not say how an array is encoded in a form body (repeated `tags[]`, JSON string, etc.).
+      responses:
+        '200':
+          description: The newly created Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/archived.json:
+    get:
+      operationId: listArchivedGoals
+      tags: [goals]
+      summary: Get archived goals for a user
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/Emaciated'
+      responses:
+        '200':
+          description: A list of Goal objects representing the user's archived goals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}.json:
+    get:
+      operationId: getGoal
+      tags: [goals]
+      summary: Get information about a goal
+      description: Gets goal details for the user's goal `slug` (beeminder.com/username/slug).
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+        - name: datapoints
+          in: query
+          required: false
+          description: Whether to send the goal's datapoints in the response.
+          schema:
+            type: boolean
+            default: false
+        - $ref: '#/components/parameters/Emaciated'
+      responses:
+        '200':
+          description: A Goal object, possibly without the `datapoints` attribute.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+    put:
+      operationId: updateGoal
+      tags: [goals]
+      summary: Update a goal for a user
+      description: |
+        Update the user's goal with slug `slug`. Similar to goal creation, but `goal_type` cannot be changed.
+        To change any of `goaldate`, `goalval`, `rate`, use `roadall`.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                yaxis:
+                  type: string
+                  description: Label for the y-axis of the graph.
+                tmin:
+                  type: string
+                  description: 'Lower bound on x-axis, date format "yyyy-mm-dd" (X-min in Graph Settings).'
+                tmax:
+                  type: string
+                  description: 'Upper bound on x-axis, date format "yyyy-mm-dd" (X-max in Graph Settings).'
+                secret:
+                  type: boolean
+                datapublic:
+                  type: boolean
+                roadall:
+                  type: array
+                  description: |
+                    Array of rows like `[date::int, value::float, rate::float]`, each with exactly one field null.
+                    - Must not make the goal easier between now and the akrasia horizon (unless you are an admin).
+                    - Use `roadall` returned by the goal GET, not `road` (the latter is missing the first and last rows).
+                    - The first row must be `[date, value, null]` and gives the start of the bright red line (same as `initday` and `initval`).
+                    - The last row can be `[null, value, rate]` but no other row can be.
+                    - Dates may also be given as a daystamp or date string, e.g. "20170727" or "2017-07-27".
+                    - A superset of `dial_road`, which changes just the last row.
+                    - If rate units change in the same call, the bright red line is updated first and rate units second; express adjustments in the original rate units, or make two calls.
+                  items:
+                    type: array
+                    items:
+                      type: [number, string, 'null']
+                  x-unverified: true
+                  x-unverified-note: The reference does not say how a nested array is encoded in a form body. Row element types are number, null, or (for dates) a daystamp/date string.
+                datasource:
+                  type: string
+                  description: 'One of "api", "ifttt", "zapier", or a registered client name. Pass the empty string to unset the datasource (return to manual entry). If the registered client name has an `autofetch_callback_url`, Beeminder POSTs to it when the goal wants new data.'
+                tags:
+                  type: [array, 'null']
+                  description: List of tags for the goal. Each tag must be alphanumeric. Replaces the existing tags; an empty array or explicit null removes all tags.
+                  items:
+                    type: string
+                    pattern: '^[A-Za-z0-9]+$'
+                  x-unverified: true
+                  x-unverified-note: The reference does not say how an array or null is encoded in a form body.
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/refresh_graph.json:
+    get:
+      operationId: refreshGoalGraph
+      tags: [goals]
+      summary: Force a fetch of autodata and graph refresh
+      description: |
+        Analogous to the refresh button on the goal page. Forces a refetch of autodata for goals with automatic data sources and refreshes the graph image regardless.
+        Be extremely conservative with this endpoint.
+        This is asynchronous: it returns `true` if the goal was queued and `false` if not. Watch for an updated graph image.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      responses:
+        '200':
+          description: '`true` if the goal was queued, `false` if not.'
+          content:
+            application/json:
+              schema:
+                type: boolean
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/dial_road.json:
+    post:
+      operationId: dialRoad
+      tags: [goals]
+      deprecated: true
+      summary: Update a yellow brick road aka bright red line
+      description: |
+        Deprecated in favor of `roadall` on goal update.
+        Changes the slope of the bright red line, starting after the one-week akrasia horizon.
+        Exactly two of `goaldate`, `goalval` and `rate` should be specified; setting two implies the third.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                rate:
+                  type: [number, 'null']
+                goaldate:
+                  type: [number, 'null']
+                goalval:
+                  type: [number, 'null']
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/shortcircuit.json:
+    post:
+      operationId: shortCircuitGoal
+      tags: [goals]
+      summary: Short circuit a goal's pledge
+      description: Increases the goal's pledge level and charges the user the amount of the current pledge. This endpoint charges real money.
+      x-charges-money: true
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/stepdown.json:
+    post:
+      operationId: stepDownGoal
+      tags: [goals]
+      summary: Step down a goal's pledge
+      description: Decreases the goal's pledge level subject to the akrasia horizon, i.e. not immediately. After a successful request the goal has a countdown (`contract.stepdown_at`) to when it reverts to the lower pledge level.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/cancel_stepdown.json:
+    post:
+      operationId: cancelStepDownGoal
+      tags: [goals]
+      summary: Cancel a scheduled step down
+      description: Cancels a pending stepdown of a goal's pledge. The pledge remains at the current amount.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/uncleme.json:
+    post:
+      operationId: uncleGoal
+      tags: [goals]
+      summary: Call "Uncle" (instant derail)
+      description: |
+        Use at your own risk. Instantly derails a goal that is imminently going to derail (in a beemergency, i.e. "in the red"): stops all alerts, charges the pledge amount, and inserts the post-derail respite into the graph.
+        Fails if the goal has more than 0 days of buffer.
+        This endpoint charges real money: it charges the user and all Groupies of the goal immediately. There are no takebacks, no undos and no refunds.
+      x-charges-money: true
+      x-unverified: true
+      x-unverified-note: The curl example in the reference omits `-X POST` (it would be a GET), while the HTTP Request line says POST. POST is used here.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/ratchet.json:
+    post:
+      operationId: ratchetGoal
+      tags: [goals]
+      summary: Ratchet a goal
+      description: |
+        Ratchets down the goal by reducing the safety buffer (do-more goals) or hard cap (do-less goals), moving the bright red line closer to current data and making the goal harder.
+
+        - Do More / Odometer / Gain Weight goals: `newsafety` is the number of days of safety buffer to ratchet down to.
+        - Do Less / Whittle Down goals: `newsafety` is the number of units of buffer (distance, in the goal's units, between the current total and the bright red line). It is relative to the bright red line, not the absolute hard-cap total.
+
+        If the goal is on a flat spot (e.g. a scheduled break starting tomorrow), `newsafety` is clamped to a minimum of 1 day; the request still returns 200 but the resulting buffer may be larger than requested.
+
+        Documented error messages (returned in the `errors` field): "newsafety parameter is required", "newsafety must be a number", "newsafety cannot be negative", "newsafety cannot exceed X", "Ratcheting to 0 days of buffer requires beemergency=True on the API call", "Goal cannot be ratcheted because it is non-monotonic in the next N days", "Goal cannot be ratcheted (may be archived, ended, or have no buffer)", "Failed to ratchet goal".
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [newsafety]
+              properties:
+                newsafety:
+                  type: number
+                  minimum: 0
+                  description: Target safety buffer to ratchet down to (days for do-more goals, units for do-less goals). Must be between 0 and the current maximum ratchetable amount.
+                beemergency:
+                  description: Required when `newsafety=0`. Must be `true`, "true" or "True". Safety mechanism against accidentally ratcheting to a beemergency.
+                  oneOf:
+                    - type: boolean
+                    - type: string
+                      enum: ['true', 'True']
+      responses:
+        '200':
+          description: The updated Goal object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Goal'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/datapoints.json:
+    get:
+      operationId: listDatapoints
+      tags: [datapoints]
+      summary: Get all the datapoints
+      description: Get the list of datapoints for the user's goal (beeminder.com/username/slug).
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+        - name: sort
+          in: query
+          required: false
+          description: Which attribute to sort on, descending. Defaults to `id` if none given.
+          schema:
+            type: string
+            default: id
+        - name: count
+          in: query
+          required: false
+          description: Limit results to this number of datapoints. Must be non-negative. Defaults to all datapoints. Ignored when `page` is specified.
+          schema:
+            type: integer
+            minimum: 0
+        - name: page
+          in: query
+          required: false
+          description: Used to paginate results; 1-indexed (page 1 is the first page).
+          schema:
+            type: integer
+            minimum: 1
+        - name: per
+          in: query
+          required: false
+          description: Number of results per page. Ignored without `page`. Must be non-negative.
+          schema:
+            type: integer
+            minimum: 0
+            default: 25
+      responses:
+        '200':
+          description: The list of Datapoint objects.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Datapoint'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createDatapoint
+      tags: [datapoints]
+      summary: Create a datapoint
+      description: |
+        Add a new datapoint to the user's goal.
+        This is an upsert and `requestid` is an idempotency key: if a datapoint with the same `requestid` exists and is identical, the request is ignored (the API returns "duplicate datapoint"); if it differs, the datapoint is updated; otherwise it is created.
+      x-unverified: true
+      x-unverified-note: The reference does not say what the "duplicate datapoint" response looks like (status code, whether it is an error object or a string).
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DatapointInput'
+      responses:
+        '200':
+          description: The created or updated Datapoint object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Datapoint'
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/datapoints/create_all.json:
+    post:
+      operationId: createDatapoints
+      tags: [datapoints]
+      summary: Create multiple datapoints
+      description: Create multiple new datapoints for the user's goal. Each datapoint must include at minimum a `value`; other parameters are the same as for single create.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [datapoints]
+              properties:
+                datapoints:
+                  type: array
+                  description: Array of datapoint objects (see DatapointInput), each with at least `value`. In the reference's curl example this is sent as a JSON-encoded array in a single form field.
+                  items:
+                    $ref: '#/components/schemas/DatapointInput'
+                  x-unverified: true
+                  x-unverified-note: The reference says "Each Datapoint should be a JSON object" and shows a JSON array string in a `-d` form field; the exact wire encoding is not specified.
+      responses:
+        '200':
+          description: A list of successfully created Datapoints, or, in the case of any errors, an object with two lists `successes` and `errors`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/Datapoint'
+                  - type: object
+                    properties:
+                      successes:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Datapoint'
+                      errors:
+                        type: array
+                        items: {}
+                        x-unverified: true
+                        x-unverified-note: The reference does not describe the shape of items in the `errors` list.
+        default:
+          $ref: '#/components/responses/Error'
+  /users/{username}/goals/{slug}/datapoints/{id}.json:
+    put:
+      operationId: updateDatapoint
+      tags: [datapoints]
+      summary: Update a datapoint
+      description: Update the datapoint with the given ID for the user's goal.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+        - $ref: '#/components/parameters/DatapointId'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                timestamp:
+                  type: number
+                value:
+                  type: number
+                comment:
+                  type: string
+      responses:
+        '200':
+          description: The updated Datapoint object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Datapoint'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteDatapoint
+      tags: [datapoints]
+      summary: Delete a datapoint
+      description: Delete the datapoint with the given ID for the user's goal.
+      parameters:
+        - $ref: '#/components/parameters/Username'
+        - $ref: '#/components/parameters/GoalSlug'
+        - $ref: '#/components/parameters/DatapointId'
+      responses:
+        '200':
+          description: The deleted Datapoint object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Datapoint'
+        default:
+          $ref: '#/components/responses/Error'
+  /charges:
+    post:
+      operationId: createCharge
+      tags: [charges]
+      summary: Create a charge
+      description: |
+        Create a charge of a given amount (US dollars, minimum 1.00) and optionally add a note. The user is inferred from the `access_token` or `auth_token`.
+        This endpoint charges real money unless `dryrun` is passed.
+      x-charges-money: true
+      x-unverified: true
+      x-unverified-note: The HTTP Request line says `POST /charges` but the curl example posts to `/charges.json`. The documented path is used here; whether both work is not stated.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [user_id, amount]
+              properties:
+                user_id:
+                  type: string
+                  description: Username of the user who is getting charged.
+                amount:
+                  type: number
+                  minimum: 1
+                  description: The amount to charge the user, in US dollars. Minimum value is 1.00.
+                note:
+                  type: string
+                  description: An explanation of why the charge was made.
+                  x-unverified: true
+                  x-unverified-note: Listed as a plain (not bracketed/optional) parameter, yet the text says "optionally add a note". Treated as optional.
+                dryrun:
+                  type: string
+                  description: If passed, the Charge is not actually created, but its JSON is returned as if it were. Default false.
+      responses:
+        '200':
+          description: The Charge object. If the request was not successful, an object with the error message(s) instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Charge'
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    authToken:
+      type: apiKey
+      in: query
+      name: auth_token
+      description: |
+        Personal authentication token, for API calls to your own account. Get it by logging in and visiting https://www.beeminder.com/api/v1/auth_token.json.
+        The reference says to append it as an additional GET or POST parameter, so for POST/PUT requests it may also be sent in the form body (not expressible as a security scheme).
+        Do not name this parameter `access_token`.
+    accessTokenQuery:
+      type: apiKey
+      in: query
+      name: access_token
+      description: OAuth access token (see Client OAuth), sent as a query parameter. May also be sent as a POST parameter.
+    accessTokenBearer:
+      type: http
+      scheme: bearer
+      description: OAuth access token sent as `Authorization Bearer <token>`. Obtain it by sending the user to https://www.beeminder.com/apps/authorize with `client_id`, `redirect_uri` and `response_type=token`; the token is returned in the redirect query string as `access_token` (plus `username`).
+  parameters:
+    Username:
+      name: username
+      in: path
+      required: true
+      description: Beeminder username. May be the literal `me`, which expands to the username of the authorized user.
+      schema:
+        type: string
+    GoalSlug:
+      name: slug
+      in: path
+      required: true
+      description: The goal's slug, the final part of its URL (beeminder.com/username/slug).
+      schema:
+        type: string
+    DatapointId:
+      name: id
+      in: path
+      required: true
+      description: Datapoint ID.
+      schema:
+        type: string
+    Emaciated:
+      name: emaciated
+      in: query
+      required: false
+      description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from the returned goal objects.
+      schema:
+        type: boolean
+        default: false
+  responses:
+    Error:
+      description: Error. The reference documents the body shape only by example, and does not document HTTP status codes.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      description: 'Error body, e.g. {"errors": "Can''t uncle a goal that''s not in the red."}.'
+      x-unverified: true
+      x-unverified-note: Only string-valued `errors` appear in the examples. For charges the reference says "an object with the error message(s)", so other shapes may exist. HTTP status codes for errors are not documented.
+      properties:
+        errors:
+          type: string
+          description: Error message.
+    GoalType:
+      type: string
+      description: |
+        Shorthand for a collection of more fundamental goal settings. Changing the type of an existing goal does not change those settings.
+        `hustler` Do More; `biker` Odometer; `fatloser` Weight loss; `gainer` Gain Weight; `inboxer` Inbox Fewer; `drinker` Do Less; `custom` Full access to the underlying goal parameters.
+      enum: [hustler, biker, fatloser, gainer, inboxer, drinker, custom]
+    User:
+      type: object
+      properties:
+        username:
+          type: string
+        timezone:
+          type: string
+        updated_at:
+          type: number
+          description: Unix timestamp (seconds) of the last update to this user or any of their goals or datapoints.
+        goals:
+          description: A list of slugs for each of the user's goals, or an array of goal objects if `diff_since` or `associations` is sent.
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: array
+              items:
+                $ref: '#/components/schemas/Goal'
+        deadbeat:
+          type: boolean
+          description: True if the user's payment info is out of date, or an attempted payment has failed.
+        urgency_load:
+          type: number
+          description: A single number capturing how edge-skatey you are across all goals. Lower means fewer urgently due goals; 0 means at least 7 days of buffer on all active goals.
+        deleted_goals:
+          type: array
+          description: Only returned if `diff_since` is sent. Each item has one key/value pair for the id of the deleted goal.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+    Goal:
+      type: object
+      description: |
+        Everything about a specific goal. One of `goaldate`, `goalval` and `rate` is null, meaning it is calculated from the other two.
+        Many attributes (including `mathishard`, `lane`, `delta`, `limsum`, `safebump`, `safebuf`, `initday`, `initval`, `curday`, `curval`, `currate`, `fullroad`, `headsum`, `graphsum`, `rah`, "and others") may be null if the goal is in an error state such that the graph cannot be generated, or if the goal is frozen. The reference does not list the "others", so only the named attributes are marked nullable.
+      properties:
+        slug:
+          type: string
+          description: The final part of the goal's URL, used as an identifier.
+        updated_at:
+          type: number
+          description: Unix timestamp of the last time this goal was updated.
+        title:
+          type: string
+          description: The title the user specified for the goal.
+        fineprint:
+          type: string
+          description: The user-provided description of what exactly they are committing to.
+        yaxis:
+          type: string
+          description: The label for the y-axis of the graph.
+        goaldate:
+          type: [number, 'null']
+          description: Unix timestamp (seconds) of the goal date. May be null (calculated from the other two of goaldate/goalval/rate).
+        goalval:
+          type: [number, 'null']
+          description: Goal value, the number the bright red line will eventually reach. May be null.
+        rate:
+          type: [number, 'null']
+          description: Slope of the (final section of the) bright red line; see `runits`. May be null.
+        runits:
+          type: string
+          description: Rate units; the rate is yearly, monthly, weekly, daily or hourly.
+          enum: [y, m, w, d, h]
+        svg_url:
+          type: string
+          description: URL for the goal's graph SVG.
+        graph_url:
+          type: string
+          description: URL for the goal's graph image.
+        thumb_url:
+          type: string
+          description: URL for the goal's graph thumbnail image.
+        autodata:
+          type: [string, 'null']
+          description: Name of the automatic data source, if any. Null for manual goals.
+        goal_type:
+          $ref: '#/components/schemas/GoalType'
+        losedate:
+          type: number
+          description: Unix timestamp of derailment; when you cross the bright red line if nothing is reported.
+        urgencykey:
+          type: string
+          description: Sort by this key (case-sensitive ASCII/Unicode ordering) to put goals in order of decreasing urgency.
+        queued:
+          type: boolean
+          description: Whether the graph is currently being updated to reflect new data.
+        secret:
+          type: boolean
+          description: Whether you have to be logged in as owner of the goal to view it. Default false.
+        datapublic:
+          type: boolean
+          description: Whether you have to be logged in as the owner to view the datapoints. Default false.
+        datapoints:
+          type: array
+          description: The datapoints for this goal.
+          items:
+            $ref: '#/components/schemas/Datapoint'
+        numpts:
+          type: number
+          description: Number of datapoints.
+        pledge:
+          type: number
+          description: Amount pledged (USD) on the goal.
+        initday:
+          type: [number, 'null']
+          description: Unix timestamp (seconds) of the start of the bright red line.
+        initval:
+          type: [number, 'null']
+          description: The y-value of the start of the bright red line.
+        curday:
+          type: [number, 'null']
+          description: Unix timestamp (seconds) of the end of the bright red line, i.e. the most recent (inferred) datapoint.
+        curval:
+          type: [number, 'null']
+          description: The value of the most recent datapoint.
+        currate:
+          type: [number, 'null']
+          description: The rate of the red line at time `curday`. If there is a rate change on that day the value may be the limit from the right, but the reference says not to count on this.
+        lastday:
+          type: number
+          description: Unix timestamp (seconds) of the last (explicitly entered) datapoint.
+        yaw:
+          type: number
+          description: Good side of the bright red line (+1/-1 = above/below).
+        dir:
+          type: number
+          description: Direction the bright red line is sloping, usually the same as `yaw`.
+        lane:
+          type: [number, 'null']
+          deprecated: true
+          description: Deprecated. See `losedate` and `safebuf`.
+        mathishard:
+          type: [array, 'null']
+          description: The goaldate, goalval and rate, all filled in. May be null if the goal is in an error state.
+          items:
+            type: number
+          minItems: 3
+          maxItems: 3
+        headsum:
+          type: [string, 'null']
+          deprecated: true
+          description: Deprecated. Summary text blurb saying how much safety buffer you have.
+        limsum:
+          type: [string, 'null']
+          description: Summary of what you need to do to eke by, e.g. "+2 within 1 day".
+        kyoom:
+          type: boolean
+          description: Cumulative; plot values as the sum of all those entered so far (auto-summing).
+        odom:
+          type: boolean
+          description: Treat zeros as accidental odometer resets.
+        edgy:
+          type: boolean
+          x-unverified: true
+          x-unverified-note: Appears only in the goal-type defaults table, not in the Goal attribute list.
+        aggday:
+          type: string
+          description: How to aggregate points on the same day, e.g. min/max/mean. The goal-type table shows "sum", "last", "min" and "max".
+        steppy:
+          type: boolean
+          description: Join dots with purple steppy-style line.
+        rosy:
+          type: boolean
+          description: Show the rose-colored dots and connecting line.
+        movingav:
+          type: boolean
+          description: Show moving average line superimposed on the data.
+        aura:
+          type: boolean
+          description: Show turquoise swath, aka blue-green aura.
+        frozen:
+          type: boolean
+          description: Whether the goal is currently frozen and must be restarted before continuing to accept data.
+        won:
+          type: boolean
+          description: Whether the goal has been successfully completed.
+        lost:
+          type: boolean
+          description: Whether the goal is currently off track.
+        maxflux:
+          type: integer
+          description: Max daily fluctuation for weight goals. Used as an absolute buffer amount after a derail; also shown on the graph as a thick guiding line.
+        contract:
+          type: object
+          description: The contract on the goal.
+          properties:
+            amount:
+              type: number
+              description: Amount at risk on the contract.
+            stepdown_at:
+              type: [number, 'null']
+              description: Unix timestamp of when the contract is scheduled to revert to the next lowest pledge amount. Null means not scheduled to revert.
+        road:
+          type: array
+          description: Array of tuples used to construct the bright red line (graph matrix). Each tuple specifies 2 of 3 of [time, goal, rate]; start from a known (time, value) and fill the missing one forward.
+          items:
+            type: array
+            items:
+              type: [number, 'null']
+        roadall:
+          type: array
+          description: Like `road` but with an additional initial row [initday, initval, null] and a final row [goaldate, goalval, rate], one of which is also null.
+          items:
+            type: array
+            items:
+              type: [number, 'null']
+        fullroad:
+          type: [array, 'null']
+          description: Like `roadall` but with the nulls filled in.
+          items:
+            type: array
+            items:
+              type: [number, 'null']
+        rah:
+          type: [number, 'null']
+          description: Red line value (y-value of the bright red line) at the akrasia horizon (today plus one week).
+        delta:
+          type: [number, 'null']
+          description: Distance from the bright red line to today's datapoint (`curval`).
+        delta_text:
+          type: string
+          deprecated: true
+          description: Deprecated.
+        safebuf:
+          type: [integer, 'null']
+          description: The integer number of safe days. Zero if it is a beemergency.
+        colorkey:
+          type: string
+          description: One of red, orange, blue, green, dkgreen, gray, indicating the amount of safety buffer (gray when an error prevents generating the graph).
+          x-unverified: true
+          x-unverified-note: The attribute text says `dkgreen` but the sample JavaScript in the same section returns "darkgreen"; kept as a plain string.
+        colorhex:
+          type: string
+          description: The RGB color corresponding to `colorkey`.
+        safebump:
+          type: [number, 'null']
+          description: The absolute y-axis number you need to reach to get one additional day of safety buffer.
+        autoratchet:
+          type: [number, 'null']
+          description: The goal's autoratchet setting (read-only); the maximum number of days of safety buffer the goal may accrue (for Do-Less goals, the max buffer in goal units). Null if not set or no permission to autoratchet.
+        id:
+          type: string
+          description: Hex-digit goal id. Useful because slugs can be changed.
+        callback_url:
+          type: string
+          description: Callback URL. If different apps change this they step on each other's toes.
+        description:
+          type: string
+          deprecated: true
+          description: Deprecated. User-supplied description of goal (the "Goal Statement" in the graph page sidebar).
+        graphsum:
+          type: [string, 'null']
+          deprecated: true
+          description: Deprecated. Text summary of the graph, no longer used in the web UI.
+        lanewidth:
+          type: number
+          deprecated: true
+          description: Deprecated. Now always zero.
+        deadline:
+          type: number
+          description: Seconds by which your deadline differs from midnight (negative is before, positive after). Allowed range is -17*3600 to 6*3600 (7am to 6am).
+        leadtime:
+          type: number
+          description: Days before derailing we start sending reminders. Zero means start on the beemergency day.
+        alertstart:
+          type: number
+          description: Seconds after midnight that reminders start (on the day you are scheduled to start getting them).
+        plotall:
+          type: boolean
+          description: Whether to plot all the datapoints, or only the `aggday`'d one.
+        last_datapoint:
+          $ref: '#/components/schemas/Datapoint'
+        integery:
+          type: boolean
+          description: Assume that the units must be integer values (used for things like `limsum`).
+        gunits:
+          type: string
+          description: Goal units, like "hours" or "pushups" or "pages".
+        timey:
+          type: boolean
+          description: Whether to show data in a "timey" way, with colons (1.5 shows as 1:30). Replaces `hhmmformat`.
+        hhmmformat:
+          type: boolean
+          deprecated: true
+          description: Deprecated; will be removed. Use `timey`.
+        todayta:
+          type: boolean
+          description: Whether there are any datapoints for today.
+        weekends_off:
+          type: boolean
+          description: If the goal has weekends automatically scheduled.
+        tmin:
+          type: string
+          description: 'Lower bound on x-axis, yyyy-mm-dd (X-min in Graph Settings).'
+        tmax:
+          type: string
+          description: 'Upper bound on x-axis, yyyy-mm-dd (X-max in Graph Settings).'
+        tags:
+          type: array
+          description: A list of the goal's tags.
+          items:
+            type: string
+        archivedate:
+          type: [number, 'null']
+          description: Unix timestamp (seconds) at which the goal will be archived. Null if already archived or not scheduled for archive. May be in the past if archival is due or in flight.
+    Datapoint:
+      type: object
+      properties:
+        id:
+          type: string
+          description: A unique ID, used to identify a datapoint when deleting or editing it.
+        timestamp:
+          type: number
+          description: Unix time (seconds) of the datapoint.
+        daystamp:
+          type: string
+          description: 'The date of the datapoint, e.g. "20150831". Prefer this over timestamp, which can be surprising due to goal deadlines.'
+        value:
+          type: number
+          description: The value, e.g. how much you weighed on the day indicated by the timestamp.
+        comment:
+          type: string
+          description: An optional comment about the datapoint.
+        updated_at:
+          type: number
+          description: Unix time that this datapoint was entered or last updated.
+        requestid:
+          type: string
+          description: If the datapoint was created via the API with this parameter, it is echoed back.
+        origin:
+          type: string
+          description: Short code for where the datapoint came from, e.g. "web", or "duolingo" for an autodata integration.
+        creator:
+          type: [string, 'null']
+          description: Like `origin` but for users; for group goals, the member who added the data. Null when there is no logical creator.
+        is_dummy:
+          type: boolean
+          description: Not a logical datapoint, e.g. a "#DERAIL" datapoint or a Pessimistic Presumptive datapoint added by Beeminder.
+        is_initial:
+          type: boolean
+          description: The initial datapoint added at goal creation. Meaningful data for Odometer goals, more of a placeholder for Do More goals.
+        created_at:
+          type: [string, number]
+          description: The timestamp at which the datapoint was created, which may differ from `timestamp`.
+          x-unverified: true
+          x-unverified-note: The reference gives the type as "time" without saying whether it is a Unix number or a formatted string.
+    DatapointInput:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: number
+        timestamp:
+          type: number
+          description: Defaults to "now", or to the existing timestamp if an existing datapoint is being updated (see `requestid`).
+        daystamp:
+          type: string
+          description: Optionally include a daystamp instead of the timestamp. If both are included, timestamp takes precedence.
+        comment:
+          type: string
+        requestid:
+          type: string
+          description: String uniquely identifying this datapoint (scoped to this goal), used as an idempotency key so clients can safely resend datapoints.
+    Charge:
+      type: object
+      properties:
+        id:
+          type: string
+          x-unverified: true
+          x-unverified-note: Present in the example response but not in the documented Charge attributes.
+        amount:
+          type: number
+          description: The amount to charge the user, in US dollars. Must be positive, at least 1.00.
+        note:
+          type: string
+          description: An explanation of why the charge was made.
+        username:
+          type: string
+          description: The Beeminder username of the user being charged.
