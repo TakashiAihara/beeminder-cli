@@ -12,7 +12,7 @@ info:
     - Timestamps are Unix time in seconds.
 
     `x-unverified: true` marks places where the reference is ambiguous or inconsistent; each carries an `x-unverified-note` saying why.
-  x-source: Beeminder API Reference (official apidocs, Slate markdown)
+  x-source: Beeminder API Reference (beeminder/apidocs, source/index.html.md) at commit 21e92e36bc15add4bcbe2944842215ab24e9aa0a, committed 2026-09-29 (git blob 8af20e66b6663ef1deefabb9493e145c64b0f30d, identical to the file this spec was written from)
 servers:
   - url: https://www.beeminder.com/api/v1
     description: Canonical base URL. Do not use http:// or a non-www host; POST parameters are lost on redirect.
@@ -54,9 +54,9 @@ paths:
         - name: diff_since
           in: query
           required: false
-          description: Unix timestamp in seconds. Only goals and datapoints created or updated since the timestamp are returned. Implies `associations`. Default null returns all goals and datapoints.
+          description: Unix timestamp in seconds. Only goals and datapoints created or updated since the timestamp are returned. Implies `associations`. Default null returns all goals and datapoints. The reference gives `updated_at` (which this is compared against) in whole seconds, so updates within the same second share the same value; keep that in mind when syncing by `updated_at`.
           schema:
-            type: number
+            type: integer
         - name: skinny
           in: query
           required: false
@@ -64,21 +64,14 @@ paths:
           schema:
             type: boolean
             default: false
-        - name: emaciated
-          in: query
-          required: false
-          description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from any goal objects returned with the user. The reference words this as presence-based ("If included"), so send `emaciated=true` or omit it; do not send `emaciated=false`.
-          schema:
-            type: boolean
-            default: false
-          x-unverified: true
-          x-unverified-note: The reference says "If included" (presence-based) but also gives "Default false"; it does not state whether an explicit `false` is honored.
+        - $ref: '#/components/parameters/Emaciated'
         - name: datapoints_count
           in: query
           required: false
           description: Only receive the `n` most recently added datapoints, sorted by `updated_at` (a datapoint with an old timestamp that was added recently sorts as recent). Default null returns all datapoints.
           schema:
-            type: number
+            type: integer
+            minimum: 0
         - name: redirect_to_url
           in: query
           required: false
@@ -101,6 +94,8 @@ paths:
               description: The `redirect_to_url` value.
               schema:
                 type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals.json:
@@ -121,6 +116,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
     post:
@@ -190,6 +187,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/archived.json:
@@ -209,6 +208,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}.json:
@@ -235,6 +236,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
     put:
@@ -283,6 +286,8 @@ paths:
                     - If rate units change in the same call, the bright red line is updated first and rate units second; express adjustments in the original rate units, or make two calls.
                   items:
                     type: array
+                    minItems: 3
+                    maxItems: 3
                     items:
                       type: [number, string, 'null']
                   x-unverified: true
@@ -305,6 +310,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/refresh_graph.json:
@@ -326,6 +333,8 @@ paths:
             application/json:
               schema:
                 type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/dial_road.json:
@@ -361,6 +370,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/shortcircuit.json:
@@ -380,6 +391,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/stepdown.json:
@@ -398,6 +411,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/cancel_stepdown.json:
@@ -416,6 +431,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Goal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/uncleme.json:
@@ -435,11 +452,13 @@ paths:
         - $ref: '#/components/parameters/GoalSlug'
       responses:
         '200':
-          description: The updated Goal object.
+          description: The updated Goal object, or an `errors` body if the goal is not red (see Error; the reference's example error is "Can't uncle a goal that's not in the red.").
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Goal'
+                $ref: '#/components/schemas/GoalResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/ratchet.json:
@@ -474,18 +493,18 @@ paths:
                   minimum: 0
                   description: Target safety buffer to ratchet down to (days for do-more goals, units for do-less goals). Must be between 0 and the current maximum ratchetable amount.
                 beemergency:
-                  description: Required when `newsafety=0`. Must be `true`, "true" or "True". Safety mechanism against accidentally ratcheting to a beemergency.
-                  oneOf:
-                    - type: boolean
-                    - type: string
-                      enum: ['true', 'True']
+                  type: string
+                  enum: ['true', 'True']
+                  description: Required when `newsafety=0`. The reference accepts `true`, "true" or "True"; in a form body all three are the same text, so the values are `true` and `True`. Safety mechanism against accidentally ratcheting to a beemergency.
       responses:
         '200':
-          description: The updated Goal object.
+          description: The updated Goal object. The reference's example errors for this endpoint are `errors` bodies (see Error).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Goal'
+                $ref: '#/components/schemas/GoalResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/datapoints.json:
@@ -535,6 +554,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Datapoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
     post:
@@ -545,7 +566,7 @@ paths:
         Add a new datapoint to the user's goal.
         This is an upsert and `requestid` is an idempotency key: if a datapoint with the same `requestid` exists and is identical, the request is ignored (the API returns "duplicate datapoint"); if it differs, the datapoint is updated; otherwise it is created.
       x-unverified: true
-      x-unverified-note: The reference does not say what the "duplicate datapoint" response looks like (status code, whether it is an error object or a string).
+      x-unverified-note: The reference does not say what the "duplicate datapoint" response looks like (status code, whether it is an error object or a bare string). The 200 schema accepts a Datapoint, an Error body, or a plain string to cover those readings.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -557,11 +578,13 @@ paths:
               $ref: '#/components/schemas/DatapointInput'
       responses:
         '200':
-          description: The created or updated Datapoint object.
+          description: The created or updated Datapoint object, or the "duplicate datapoint" response when an identical datapoint with the same `requestid` already exists.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Datapoint'
+                $ref: '#/components/schemas/DatapointResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/datapoints/create_all.json:
@@ -611,6 +634,8 @@ paths:
                         items: {}
                         x-unverified: true
                         x-unverified-note: The reference does not describe the shape of items in the `errors` list.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/datapoints/{id}.json:
@@ -643,6 +668,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Datapoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
     delete:
@@ -661,6 +688,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Datapoint'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
   /charges:
@@ -671,9 +700,9 @@ paths:
       description: |
         Create a charge of a given amount (US dollars, minimum 1.00) and optionally add a note. The user is inferred from the `access_token` or `auth_token`.
         This endpoint charges real money unless `dryrun` is passed.
+
+        Path: the reference's HTTP Request line says `POST /charges` while its curl example posts to `/charges.json`. Measured unauthenticated on 2026-11-20, both paths exist (each returns 401, while an unknown path returns 404), so `/charges.json` also routes.
       x-charges-money: true
-      x-unverified: true
-      x-unverified-note: The HTTP Request line says `POST /charges` but the curl example posts to `/charges.json`. The documented path is used here; whether both work is not stated.
       requestBody:
         required: true
         content:
@@ -707,7 +736,13 @@ paths:
               schema:
                 anyOf:
                   - $ref: '#/components/schemas/Charge'
+                    not:
+                      required: [errors]
+                      properties:
+                        errors: {}
                   - $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         default:
           $ref: '#/components/responses/Error'
 components:
@@ -728,13 +763,13 @@ components:
     accessTokenBearer:
       type: http
       scheme: bearer
-      description: OAuth access token sent as `Authorization Bearer <token>`. Obtain it by sending the user to https://www.beeminder.com/apps/authorize with `client_id`, `redirect_uri` and `response_type=token`; the token is returned in the redirect query string as `access_token` (plus `username`).
+      description: 'OAuth access token sent as `Authorization: Bearer <token>`. Obtain it by sending the user to https://www.beeminder.com/apps/authorize with `client_id`, `redirect_uri` and `response_type=token`; the token is returned in the redirect query string as `access_token` (plus `username`).'
   parameters:
     Username:
       name: username
       in: path
       required: true
-      description: Beeminder username. May be the literal `me`, which expands to the username of the authorized user.
+      description: Beeminder username. May be the literal `me`, which expands to the username of the authorized user. The reference documents this in the Client OAuth section ("use `me` in place of the username for any endpoint", e.g. `/users/me.json` with an `access_token`); it does not say whether `me` also works with a personal `auth_token`.
       schema:
         type: string
     GoalSlug:
@@ -758,10 +793,18 @@ components:
       description: If included, the goal attributes `road`, `roadall` and `fullroad` are stripped from the returned goal objects. The reference words this as presence-based ("If included"), so send `emaciated=true` or omit it; do not send `emaciated=false`.
       schema:
         type: boolean
-        default: false
       x-unverified: true
-      x-unverified-note: The reference says "If included" (presence-based) but also gives "Default false"; it does not state whether an explicit `false` is honored.
+      x-unverified-note: The reference says "If included" (presence-based) but also gives "Default false"; it does not state whether an explicit `false` is honored. No `default` is declared so generated clients omit the parameter instead of sending `false`.
   responses:
+    Unauthorized:
+      description: Authentication failed. Measured unauthenticated on 2026-11-20 (GET /users/me.json without a token, and GET of an unknown user without a token, both returned 401 with this body shape).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            errors:
+              message: Token missing or incorrect token.
     Error:
       description: Error. The reference documents the body shape only by example, and does not document HTTP status codes.
       content:
@@ -771,15 +814,41 @@ components:
   schemas:
     Error:
       type: object
-      description: 'Error body, e.g. {"errors": "Can''t uncle a goal that''s not in the red."}.'
+      description: |
+        Error body. `errors` is a string in the reference's examples (`{"errors": "Can't uncle a goal that's not in the red."}`), an object with a `message` string (measured 401 body, 2026-11-20), or, per the reference for charges, "an object with the error message(s)".
       x-unverified: true
-      x-unverified-note: Only string-valued `errors` appear in the examples. For charges the reference says "an object with the error message(s)", so other shapes may exist. HTTP status codes for errors are not documented.
+      x-unverified-note: The reference only shows string-valued `errors`; the object form comes from a live measurement. HTTP status codes for errors other than the measured 401 are not documented.
       required:
         - errors
       properties:
         errors:
-          type: string
-          description: Error message.
+          description: Error message(s).
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                message:
+                  type: string
+              additionalProperties: true
+    GoalResult:
+      description: A Goal, or an `errors` body. A body that has `errors` only matches Error.
+      anyOf:
+        - $ref: '#/components/schemas/Goal'
+          not:
+            required: [errors]
+            properties:
+              errors: {}
+        - $ref: '#/components/schemas/Error'
+    DatapointResult:
+      description: A Datapoint, an `errors` body, or the plain string "duplicate datapoint". A body that has `errors` only matches Error.
+      anyOf:
+        - $ref: '#/components/schemas/Datapoint'
+          not:
+            required: [errors]
+            properties:
+              errors: {}
+        - $ref: '#/components/schemas/Error'
+        - type: string
     GoalType:
       type: string
       description: |
@@ -1001,6 +1070,8 @@ components:
           description: Like `road` but with an additional initial row [initday, initval, null] and a final row [goaldate, goalval, rate], one of which is also null.
           items:
             type: array
+            minItems: 3
+            maxItems: 3
             items:
               type: [number, 'null']
         fullroad:
@@ -1008,6 +1079,8 @@ components:
           description: Like `roadall` but with the nulls filled in, so rows contain no nulls. The whole attribute may be null if the goal is in an error state.
           items:
             type: array
+            minItems: 3
+            maxItems: 3
             items:
               type: number
         rah:
