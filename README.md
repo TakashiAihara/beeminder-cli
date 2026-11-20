@@ -4,6 +4,25 @@ CLI for the [Beeminder API](https://api.beeminder.com/): read the user and goals
 
 ## Install
 
+Install a released binary as `beeminder` with `install.sh`. It stops without installing when the checksum does not match.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/beeminder-cli/main/install.sh | sh
+```
+
+To pin a tag, put the variable on the `sh` side; on the `curl` side it never reaches install.sh and latest is installed.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/beeminder-cli/main/install.sh | BEEMINDER_CLI_VERSION=v0.1.0 sh
+```
+
+- `BEEMINDER_CLI_VERSION` defaults to `latest`, which is resolved to a tag once; both the binary and `SHA256SUMS` come from that tag.
+- `BEEMINDER_CLI_INSTALL_DIR` changes the install location (default `$HOME/.local/bin`).
+- `BEEMINDER_CLI_VERIFY_ATTESTATION=1` also verifies the build provenance with `gh`; without `gh`, or when verification fails, it stops without installing.
+- To fetch the files by hand, use the `beeminder-cli-<os>-<arch>` and `SHA256SUMS` assets on [Releases](https://github.com/TakashiAihara/beeminder-cli/releases); os is `linux` / `darwin`, arch is `x64` / `arm64`.
+
+To run from source instead:
+
 ```bash
 mise install
 bun install
@@ -54,4 +73,14 @@ beeminder add <slug> -1.5
 bun run generate          # regenerate src/generated from openapi/beeminder.yaml
 bun run check             # typecheck + lint + format:check + acceptance tests (Prism mock)
 BEEMINDER_TEST_AUTH_TOKEN=... BEEMINDER_TEST_GOAL=<slug> bun run test:integration   # real API; the goal must use aggday sum
+```
+
+## Releasing
+
+Every push to `main` whose `CI` run succeeded releases `vX.Y.Z-rc.N`, counted from the existing tags. Pushing a `v*` tag releases that tag, and a run can be dispatched again for a tag that already exists.
+
+If a run dies between creating the tag and publishing the release — a cancelled job, a lost runner — the tag is left with no release and counting skips its number. Remove it so the next run can use it:
+
+```bash
+git push --delete origin <tag>
 ```

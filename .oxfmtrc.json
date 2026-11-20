@@ -6,5 +6,13 @@
   "semi": true,
   "trailingComma": "all",
   "bracketSpacing": true,
-  "ignorePatterns": ["*.md", "*.yaml", "bun.lock", "**/node_modules/", "**/tmp/", "src/generated/"]
+  "ignorePatterns": [
+    "*.md",
+    "*.yaml",
+    "bun.lock",
+    "**/node_modules/",
+    "**/dist/",
+    "**/tmp/",
+    "src/generated/"
+  ]
 }

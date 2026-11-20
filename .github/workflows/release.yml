@@ -1,0 +1,337 @@
+name: release
+
+on:
+  # Every push to main that passes CI becomes a release. install.sh takes latest, so what
+  # gets handed out is main's content, not whatever tag was last cut by hand.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # A tag pushed by hand is released as that tag. This is how a final version is cut.
+  push:
+    tags: ["v*"]
+  # Re-release a tag that is already pushed (re-running a run that died partway, say). A new
+  # tag cannot be cut here; a tag that does not exist fails at checkout. A final version is
+  # cut by pushing a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to release again (e.g. v0.1.0)"
+        required: true
+
+# each job gets only the permissions it needs
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+# Run only one of main's automatic releases at a time (so two runs cannot read the same
+# highest tag and race for the same next tag). A group holds only one pending run and a
+# newer one cancels an older one, but on main an older commit releases nothing anyway. A
+# release for a hand-pushed tag goes into a per-run group so a later main run cannot cancel
+# it.
+#
+# Only "the CI run for a push to this repo's main" joins the main group. Other workflow_run
+# events happen too (a PR in this repo, a push to a branch named main in a fork), but all
+# they do is skip every job. Whether a run can be cancelled is decided per run, not per job,
+# so if those runs joined the same group, a run that should skip everything would cancel a
+# queued main run.
+concurrency:
+  group: >-
+    release-${{ github.event_name == 'workflow_run' &&
+    (github.event.workflow_run.event == 'push' &&
+    github.event.workflow_run.head_repository.full_name == github.repository && 'main' ||
+    github.run_id) || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  # Actions are pinned by commit, not by tag (the version is a trailing comment). An action's
+  # tag can be moved by whoever controls that action; pinning by commit means the code that
+  # checks, builds and signs is the code that was reviewed. publish signs the provenance, so
+  # a substituted action would otherwise be signed and shipped.
+  tag:
+    # workflow_run fires for every CI run on a branch named main, including the main of a
+    # fork's PR, so only pushes to this repo's main become a release.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    # this job runs repository code (mise / bun / scripts / check), so it gets no write
+    # permission
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # the check step runs the same checks as a CI run, so cap it the way CI's 10-minute job
+    # would: long enough for install + check, short enough that a hang does not queue main
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      # Look at the input before it is used as checkout's ref. Passing a branch name would
+      # release that branch's content under a tag's name. The shape is the one
+      # publish-release.sh compares against: numbers have no leading zeros and at most 9
+      # digits. Failing here keeps checkout and build from running at all.
+      - name: check the requested tag
+        if: github.event_name != 'workflow_run'
+        env:
+          GIVEN: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          shape='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(-rc\.(0|[1-9][0-9]{0,8}))?$'
+          [[ "$GIVEN" =~ $shape ]] || { echo "::error::tag must be vX.Y.Z or vX.Y.Z-rc.N, 9 digits per number at most and no leading zero: $GIVEN"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || (github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag)) || github.ref }}
+          # all tags for counting the next tag, and origin/main for checking whether main moved on
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Every later job uses this commit. If the tag moved afterwards, a commit that was
+      # neither checked nor published would go out, so the commit to use is decided here
+      # and passed on.
+      - name: read the checked commit
+        id: commit
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # setup-bun cannot read .mise.toml (only .tool-versions, package.json and
+      # .bun-version), so mise, the same as CI, keeps bun's version in the one place
+      # .mise.toml is. The cache is off so that a cache written by another run (a PR, say)
+      # is never read by the build of a binary that gets signed and shipped.
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
+        with:
+          cache: false
+
+      # A main run is a commit CI already passed, so it is used as is. A tag or a dispatch
+      # can point at a commit CI never ran on, so it is checked here before the build.
+      - name: check
+        if: github.event_name != 'workflow_run'
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun run check
+
+      - name: decide the tag
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          GIVEN: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != workflow_run ]; then
+            echo "tag=$GIVEN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # main has a newer commit, and its run does the release. Releasing the older one
+          # later would put older code out as latest. When origin/main cannot be fetched,
+          # fail the whole job rather than read it as "not moved" (no silent skip on an
+          # empty-string comparison).
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          main_sha="$(git rev-parse --verify refs/remotes/origin/main)"
+          head_sha="$(git rev-parse HEAD)"
+          if [ "$main_sha" != "$head_sha" ]; then
+            # If the reason the build was skipped is not left in the run summary, it looks
+            # like "green but no release", so make it an annotation.
+            echo "::notice::main has moved to ${main_sha}; this run for ${head_sha} releases nothing"
+            exit 0
+          fi
+          # A re-run of the same commit reuses the previous tag instead of cutting a
+          # different one. What an automatic re-run reuses is only the rc tag it cut
+          # itself: a hand-pushed final version on the same commit is not picked.
+          rc_tags="$(git tag --points-at HEAD --list 'v*-rc.*')"
+          # grep exits 1 when nothing matches, so only that case is taken as empty (a git
+          # failure stops at the assignment above). The same shape publish-release.sh
+          # checks is used here, so a tag picked up here can be released later.
+          existing="$(printf '%s\n' "$rc_tags" | grep -E '^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})-rc\.(0|[1-9][0-9]{0,8})$' | sort -V | tail -n 1)" || existing=""
+          # Command substitutions go in their own assignments. Inside echo's arguments a
+          # failure would not trip set -e and the run would end green with an empty tag.
+          if [ -n "$existing" ]; then
+            tag="$existing"
+          else
+            tag="$(bun scripts/next-tag.ts)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: tag
+    if: needs.tag.outputs.tag != ''
+    # No write permission and no signing permission. Only the publish job can create a tag
+    # or a release, leaving a moved tag no room to make the build cut a tag underneath it.
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    # four cross-compiles and the binary checks, capped so a hung build does not sit in
+    # front of main's next release
+    timeout-minutes: 15
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+    steps:
+      # Build the commit the tag job checked, as is. Even if the tag moves afterwards, no
+      # binary is built from a commit that was not checked.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.tag.outputs.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a # v5.2.10
+        with:
+          cache: false
+      - run: bun install --frozen-lockfile
+
+      # bun cross-compiles, so all four are built on one machine. Splitting runners per OS
+      # would weaken the guarantee that they were built from the same input.
+      # scripts/build.ts is the source of truth for what the build does. RELEASE_TAG is
+      # embedded into --version.
+      - name: build
+        env:
+          RELEASE_TAG: ${{ env.TAG }}
+        run: |
+          set -eux
+          bun run build
+          cd dist && sha256sum beeminder-cli-* > SHA256SUMS && cat SHA256SUMS
+
+      # linux-x64 is the only one this runner can run. --version checks the embedding took
+      # effect; a binary that names a version other than the tag is not shipped. The other
+      # three cannot run from here, so check-binaries.sh reads their image and embedding
+      # with file(1), and then this one is run. Only the verify job's runners can run the
+      # other three, so execution is left to them.
+      - name: check the built binaries
+        run: sh scripts/check-binaries.sh
+
+      # What gets published is only the archive uploaded here. publish and verify both
+      # just download it, so what was checked and what gets published are the same thing.
+      # If the artifact is missing the download side stops, so there is no path that ships
+      # an empty dist. if-no-files-found does not see a partial upload, so all four being
+      # present is left to check-binaries.sh.
+      - name: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-binaries
+          # only this run's verify and publish read it, so pick the shorter retention
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            dist/beeminder-cli-*
+            dist/SHA256SUMS
+
+  verify:
+    needs: [tag, build]
+    if: needs.tag.outputs.tag != ''
+    permissions:
+      contents: read
+    # one failure does not stop the rest, so all four leave a result on the run (publish
+    # stops on any one of them failing)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-15
+    # cap how long one binary can keep running, so a stuck binary does not hold up main's
+    # next release
+    timeout-minutes: 15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # The script that runs it also comes from the same commit the build used. Only that
+      # one script is needed; neither bun nor mise is.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.tag.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: dist
+
+      - name: check the sum and run the binary
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          # Match what was downloaded against build's SHA256SUMS. Use whichever tool
+          # exists (sha256sum / shasum) so the same comparison holds on every runner.
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum -c SHA256SUMS)
+          else
+            (cd dist && shasum -a 256 -c SHA256SUMS)
+          fi
+          sh scripts/run-binary.sh "dist/beeminder-cli-$TARGET" "$TAG"
+
+  # Publish only the shape all four of verify ran. On a run where any needed job failed
+  # (or was skipped) nothing is published.
+  publish:
+    needs: [tag, build, verify]
+    if: needs.tag.outputs.tag != ''
+    permissions:
+      contents: write
+      # the checksum lives in the same release, so it is no proof of authenticity; attach
+      # provenance so which workflow built from which commit can be verified
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+    # asset upload and API calls only; a stuck upload must not outlast this
+    timeout-minutes: 10
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+    steps:
+      # Take the release content and the downloaded dist/ from the same commit. Publishing
+      # with a script from a different commit would make what is published and what was
+      # built different things.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.tag.outputs.sha }}
+          persist-credentials: false
+
+      # Download what build uploaded, as is. What gets attested and what goes on the
+      # release is this dist/.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: dist
+
+      # Check that all four match the sums build emitted before signing. Both what gets
+      # signed and what goes on the release is this dist/, so what is published and what
+      # is signed are never different things.
+      - name: check the sums
+        working-directory: dist
+        run: |
+          set -eux
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/beeminder-cli-*"
+
+      # publish-release.sh creates the tag via the API first, then creates the release.
+      # contents: write is needed not just for the tag but for the release itself.
+      # A tag created with this token does not trigger workflows, so the tag-push trigger
+      # above does not release it twice.
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The three paths (push / workflow_run / workflow_dispatch) differ in how a tag
+          # for a commit that is not main's head is handled. The script can only tell them
+          # apart by the event name, so pass it.
+          RELEASE_TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # for comparing against main's head and for publish-release.sh to check who the
+          # tag already belongs to. The version comparison is done via gh release list.
+          # checkout is shallow, so tags are not fetched on their own.
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/tags/*:refs/tags/*'
+          MAIN_SHA="$(git rev-parse --verify refs/remotes/origin/main)"
+          export MAIN_SHA
+          sh scripts/publish-release.sh

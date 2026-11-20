@@ -1,0 +1,271 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { makeSandbox, removeSandbox, type Sandbox } from "./helpers/cli.ts";
+
+const INSTALL_SH = resolve(import.meta.dir, "../../install.sh");
+const REPO_PATH = "/TakashiAihara/beeminder-cli/releases";
+const OS = process.platform === "darwin" ? "darwin" : "linux";
+const ARCH = process.arch === "arm64" ? "arm64" : "x64";
+const ASSET = `beeminder-cli-${OS}-${ARCH}`;
+
+const WORKING = "#!/bin/sh\necho working\n";
+// an interpreter that does not exist cannot exec; without a shebang sh would run it as a script
+const BROKEN = "#!/nonexistent/interp\n";
+const OLD = "#!/bin/sh\necho old-install\n";
+
+// a PATH with only the tools install.sh needs; a real gh leaking in makes "gh is missing"
+// unbuildable
+const TOOLS = [
+  "uname",
+  "mktemp",
+  "rm",
+  "mkdir",
+  "mv",
+  "chmod",
+  "grep",
+  "awk",
+  "sha256sum",
+  "sleep",
+];
+
+type Release = { binary?: string; sums?: string };
+
+let sb: Sandbox;
+let server: ReturnType<typeof Bun.serve>;
+let requests: string[] = [];
+let latestCalls = 0;
+let bin: string;
+let installDir: string;
+
+function startServer(releases: Record<string, Release>): void {
+  server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      requests.push(path);
+      if (path === `${REPO_PATH}/latest`) {
+        // the second call on points at another release; that is how resolving only once is
+        // observed
+        latestCalls += 1;
+        const tags = Object.keys(releases);
+        const tag = tags[Math.min(latestCalls - 1, tags.length - 1)];
+        return new Response(null, {
+          status: 302,
+          headers: { location: `${REPO_PATH}/tag/${tag}` },
+        });
+      }
+      if (path.startsWith(`${REPO_PATH}/tag/`)) return new Response("release page");
+      const m = new RegExp(`^${REPO_PATH}/download/([^/]+)/(.+)$`).exec(path);
+      const release = m?.[1] ? releases[m[1]] : undefined;
+      if (!release) return new Response("not found", { status: 404 });
+      if (m?.[2] === ASSET && release.binary !== undefined) return new Response(release.binary);
+      if (m?.[2] === "SHA256SUMS" && release.sums !== undefined) return new Response(release.sums);
+      return new Response("not found", { status: 404 });
+    },
+  });
+}
+
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+const release = (binary: string): Release => ({ binary, sums: `${sha(binary)}  ${ASSET}\n` });
+
+function writeTool(name: string, body: string): void {
+  const file = join(bin, name);
+  writeFileSync(file, `#!/bin/sh\n${body}\n`);
+  chmodSync(file, 0o755);
+}
+
+beforeEach(() => {
+  sb = makeSandbox();
+  requests = [];
+  latestCalls = 0;
+  bin = join(sb.dir, "bin");
+  installDir = join(sb.dir, "install");
+  mkdirSync(bin);
+  for (const t of TOOLS) {
+    const real = Bun.which(t);
+    if (!real) throw new Error(`${t} is needed to run install.sh`);
+    symlinkSync(real, join(bin, t));
+  }
+});
+
+afterEach(() => {
+  server.stop(true);
+  removeSandbox(sb);
+});
+
+// point github.com curls at the local server; install.sh's URL is not rewritten
+function shimCurl(): void {
+  const real = Bun.which("curl");
+  if (!real) throw new Error("curl is needed to run install.sh");
+  writeTool(
+    "curl",
+    `for a; do shift; case "$a" in https://github.com/*) a="http://127.0.0.1:${server.port}/\${a#https://github.com/}";; esac; set -- "$@" "$a"; done
+exec ${real} "$@"`,
+  );
+}
+
+async function install(env: Record<string, string> = {}, script = INSTALL_SH) {
+  shimCurl();
+  const proc = Bun.spawn(["/bin/sh", script], {
+    cwd: sb.dir,
+    env: { PATH: bin, HOME: sb.home, BEEMINDER_CLI_INSTALL_DIR: installDir, ...env },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { out, err, code };
+}
+
+const installed = () => join(installDir, "beeminder");
+const leftovers = () =>
+  existsSync(installDir) ? readdirSync(installDir).filter((f) => f.startsWith(".")) : [];
+
+function placeOldInstall(): void {
+  mkdirSync(installDir, { recursive: true });
+  writeFileSync(installed(), OLD);
+  chmodSync(installed(), 0o755);
+}
+
+describe("install.sh", () => {
+  test("resolves latest once and takes both the binary and SHA256SUMS from that tag", async () => {
+    startServer({ "v1.0.0-rc.3": release(WORKING), "v1.0.0-rc.4": release(WORKING) });
+
+    const r = await install();
+
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("(v1.0.0-rc.3)");
+    expect(latestCalls).toBe(1);
+    expect(requests.filter((p) => p.includes("/download/"))).toEqual([
+      `${REPO_PATH}/download/v1.0.0-rc.3/${ASSET}`,
+      `${REPO_PATH}/download/v1.0.0-rc.3/SHA256SUMS`,
+    ]);
+    expect(readFileSync(installed(), "utf8")).toBe(WORKING);
+    expect(leftovers()).toEqual([]);
+  });
+
+  test("a tag in BEEMINDER_CLI_VERSION never looks up latest", async () => {
+    startServer({ "v0.5.0": release(WORKING) });
+
+    const r = await install({ BEEMINDER_CLI_VERSION: "v0.5.0" });
+
+    expect(r.code).toBe(0);
+    expect(latestCalls).toBe(0);
+  });
+
+  test("a checksum mismatch installs nothing", async () => {
+    startServer({ "v1.0.0": { binary: WORKING, sums: `${sha("other")}  ${ASSET}\n` } });
+    placeOldInstall();
+
+    const r = await install();
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("checksum mismatch");
+    expect(readFileSync(installed(), "utf8")).toBe(OLD);
+  });
+
+  test("a TERM mid-run under dash leaves no scratch dir in the install dir", async () => {
+    const dash = Bun.which("dash");
+    if (!dash) throw new Error("dash is needed for this test");
+    startServer({ "v1.0.0": release("#!/bin/sh\nsleep 2\n") });
+    shimCurl();
+    const proc = Bun.spawn([dash, INSTALL_SH], {
+      cwd: sb.dir,
+      env: { PATH: bin, HOME: sb.home, BEEMINDER_CLI_INSTALL_DIR: installDir },
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    for (let i = 0; i < 100 && leftovers().length === 0; i++) await Bun.sleep(20);
+    expect(leftovers().length).toBe(1);
+
+    proc.kill("SIGTERM");
+
+    expect(await proc.exited).toBe(143);
+    expect(leftovers()).toEqual([]);
+  }, 15_000);
+
+  test("a binary that does not run stops without replacing the installed one", async () => {
+    startServer({ "v1.0.0": release(BROKEN) });
+    placeOldInstall();
+
+    const r = await install();
+
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain("does not run");
+    expect(readFileSync(installed(), "utf8")).toBe(OLD);
+    expect(leftovers()).toEqual([]);
+  });
+
+  describe("BEEMINDER_CLI_VERIFY_ATTESTATION=1", () => {
+    const verify = { BEEMINDER_CLI_VERIFY_ATTESTATION: "1" };
+
+    test("stops unverified without installing when gh is missing", async () => {
+      startServer({ "v1.0.0": release(WORKING) });
+      placeOldInstall();
+
+      const r = await install(verify);
+
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain("needs gh");
+      expect(readFileSync(installed(), "utf8")).toBe(OLD);
+    });
+
+    test("stops with the reason gh gave when verification fails", async () => {
+      startServer({ "v1.0.0": release(WORKING) });
+      writeTool("gh", `echo "HTTP 401: bad credentials" >&2\nexit 1`);
+      placeOldInstall();
+
+      const r = await install(verify);
+
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain("attestation verification failed: HTTP 401: bad credentials");
+      expect(readFileSync(installed(), "utf8")).toBe(OLD);
+    });
+
+    test("installs when verification passes", async () => {
+      startServer({ "v1.0.0": release(WORKING) });
+      writeTool("gh", `exit 0`);
+
+      const r = await install(verify);
+
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("attestation ok");
+      expect(readFileSync(installed(), "utf8")).toBe(WORKING);
+    });
+  });
+
+  // the whole body runs inside main(), which only the last line calls: a download cut off
+  // inside the function is a syntax error, and one cut right after it never calls main.
+  // Either way nothing is fetched and nothing is written.
+  test("a truncated install.sh does nothing", async () => {
+    const lines = readFileSync(INSTALL_SH, "utf8").split("\n");
+    const cut = lines.findIndex((line) => line.includes('curl -fsSL "${base}/${asset}"'));
+    expect(cut).toBeGreaterThan(0);
+    const partial = join(sb.dir, "install-partial.sh");
+    writeFileSync(partial, `${lines.slice(0, cut + 1).join("\n")}\n`);
+
+    startServer({ "v1.0.0": release(WORKING) });
+    const r = await install({}, partial);
+
+    expect(r.code).not.toBe(0);
+    expect(requests).toEqual([]);
+    expect(existsSync(installed())).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+});
