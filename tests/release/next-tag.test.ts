@@ -56,6 +56,9 @@ describe("nextTag", () => {
     expect(nextTag(["v0.1.0-rc.3", "v0.011.0"], FIRST)).toBe("v0.1.0-rc.4");
     expect(nextTag(["v0.1.0-rc.3", "v0.1.0-rc.007"], FIRST)).toBe("v0.1.0-rc.4");
     expect(nextTag(["v0.1.0-rc.3", "v9999999999.0.0"], FIRST)).toBe("v0.1.0-rc.4");
+    expect(nextTag(["v0.1.0-rc.3", "v0.1.010"], FIRST)).toBe("v0.1.0-rc.4");
+    expect(nextTag(["v0.1.0-rc.3", "v0.1234567890.0"], FIRST)).toBe("v0.1.0-rc.4");
+    expect(nextTag(["v0.1.0-rc.3", "v0.1.0-rc.1234567890"], FIRST)).toBe("v0.1.0-rc.4");
   });
 
   test("reads a tag with a trailing carriage return", () => {

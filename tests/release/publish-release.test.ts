@@ -12,7 +12,7 @@ let sb: Sandbox;
 let calls: string;
 
 // the temp repo's commits must not see the user config: a commit.gpgsign=true there would
-// make every commit fail, and a missing user.name the opposite. Identity comes from the
+// make every commit fail, and a missing user.name would fail them too. Identity comes from the
 // explicit author/committer variables instead.
 const GIT_ENV = {
   GIT_CONFIG_GLOBAL: "/dev/null",

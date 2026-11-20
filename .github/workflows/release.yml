@@ -46,11 +46,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Actions are pinned by commit, not by tag (the version is a trailing comment). A pushed
-  # tag can be moved before the run reads it, so a mutable action ref could be swapped under
-  # the tag the run says it is for and a substituted action would pass as what was
-  # "checked" and "built". publish signs the provenance, so that substitution would be
-  # signed and shipped.
+  # Actions are pinned by commit, not by tag (the version is a trailing comment). An action's
+  # tag can be moved by whoever controls that action; pinning by commit means the code that
+  # checks, builds and signs is the code that was reviewed. publish signs the provenance, so
+  # a substituted action would otherwise be signed and shipped.
   tag:
     # workflow_run fires for every CI run on a branch named main, including the main of a
     # fork's PR, so only pushes to this repo's main become a release.
