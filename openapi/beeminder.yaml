@@ -3,7 +3,7 @@ info:
   title: Beeminder API
   version: v1
   description: |
-    Beeminder API v1, written from the official API reference (Slate markdown) only.
+    Beeminder API v1, written from the official API reference (Slate markdown) plus live measurements against a test account on 2026-11-20 (writes reverted). Where a description says "measured", it comes from those requests, not from the reference.
 
     Conventions taken from the reference:
     - Every endpoint requires authentication (see `securitySchemes`).
@@ -11,7 +11,7 @@ info:
     - Use exactly the base URL below. Beeminder redirects `http` and non-`www` requests but does not forward parameters for POST requests.
     - Timestamps are Unix time in seconds.
 
-    `x-unverified: true` marks places where the reference is ambiguous or inconsistent; each carries an `x-unverified-note` saying why.
+    `x-unverified: true` marks anything that neither the reference nor a measurement settles (ambiguous or inconsistent reference text, unmeasured request bodies, unknown status codes); each carries an `x-unverified-note` saying why.
   x-source: Beeminder API Reference (beeminder/apidocs, source/index.html.md) at commit 21e92e36bc15add4bcbe2944842215ab24e9aa0a, committed 2026-09-29 (git blob 8af20e66b6663ef1deefabb9493e145c64b0f30d, identical to the file this spec was written from)
 servers:
   - url: https://www.beeminder.com/api/v1
@@ -79,25 +79,18 @@ paths:
           schema:
             type: string
           x-unverified: true
-          x-unverified-note: The reference says the user is redirected but gives neither the 3xx status code nor the response body, and does not say whether this can be combined with the other parameters.
+          x-unverified-note: The reference says that on success the user is redirected to this URL instead of getting a User object, but gives neither the 3xx status code nor the response body, and does not say whether this can be combined with the other parameters. No redirect response is modelled because it breaks generated clients.
       responses:
         '200':
-          description: A User object (normal case, without `redirect_to_url`).
+          description: A User object (normal case, without `redirect_to_url`). With `redirect_to_url` the server redirects instead (status code unknown, see the parameter).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/User'
-        3XX:
-          description: Returned instead of a User object when `redirect_to_url` is given and authentication succeeds; redirects to that URL. The reference does not give the exact status code, so a 3XX range is used.
-          headers:
-            Location:
-              description: The `redirect_to_url` value.
-              schema:
-                type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals.json:
     get:
       operationId: listGoals
@@ -119,7 +112,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
     post:
       operationId: createGoal
       tags: [goals]
@@ -128,6 +121,8 @@ paths:
         Create a new goal for the user. Rule: exactly two out of three of `goaldate`, `goalval` and `rate` are required (the reference's example sends the unused one as `null`); sending fewer or more than two is invalid.
 
         If you pass your API client's registered name as `datasource` and your client has a registered `autofetch_callback_url`, Beeminder POSTs to your callback when the goal wants new data.
+      x-unverified: true
+      x-unverified-note: JSON body not measured; the reference shows form-encoded examples.
       parameters:
         - $ref: '#/components/parameters/Username'
       requestBody:
@@ -178,6 +173,8 @@ paths:
                   items:
                     type: string
                     pattern: '^[A-Za-z0-9]+$'
+                  x-unverified: true
+                  x-unverified-note: A JSON tags array was measured only on goal update (PUT), not on create; the reference does not say how an array is sent.
       responses:
         '200':
           description: The newly created Goal object.
@@ -188,9 +185,20 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          $ref: '#/components/responses/UnprocessableEntity'
+          description: Validation failure. Inferred from the goal update endpoint (measured there); not measured on create.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                validation-tags:
+                  summary: Non-alphanumeric tag (measured on goal update)
+                  value:
+                    errors:
+                      tags:
+                        - must each be alphanumeric
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/archived.json:
     get:
       operationId: listArchivedGoals
@@ -211,7 +219,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}.json:
     get:
       operationId: getGoal
@@ -239,7 +247,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
     put:
       operationId: updateGoal
       tags: [goals]
@@ -313,7 +321,7 @@ paths:
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/refresh_graph.json:
     get:
       operationId: refreshGoalGraph
@@ -336,7 +344,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/dial_road.json:
     post:
       operationId: dialRoad
@@ -347,6 +355,8 @@ paths:
         Deprecated in favor of `roadall` on goal update.
         Changes the slope of the bright red line, starting after the one-week akrasia horizon.
         Rule: exactly two of `goaldate`, `goalval` and `rate` should be specified; setting two implies the third (the reference's example sends the unused one as `null`).
+      x-unverified: true
+      x-unverified-note: JSON body not measured; the reference shows form-encoded examples.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -373,7 +383,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/shortcircuit.json:
     post:
       operationId: shortCircuitGoal
@@ -394,7 +404,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/stepdown.json:
     post:
       operationId: stepDownGoal
@@ -414,7 +424,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/cancel_stepdown.json:
     post:
       operationId: cancelStepDownGoal
@@ -434,7 +444,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/uncleme.json:
     post:
       operationId: uncleGoal
@@ -452,7 +462,7 @@ paths:
         - $ref: '#/components/parameters/GoalSlug'
       responses:
         '200':
-          description: The updated Goal object, or an `errors` body if the goal is not red (see Error; the reference's example error is "Can't uncle a goal that's not in the red.").
+          description: The updated Goal object, or an `errors` body if the goal is not red (see ApiError; the reference's example error is "Can't uncle a goal that's not in the red.").
           content:
             application/json:
               schema:
@@ -460,7 +470,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/ratchet.json:
     post:
       operationId: ratchetGoal
@@ -477,6 +487,8 @@ paths:
         Rule: when `newsafety` is 0, `beemergency` must also be sent as `true`, otherwise the request fails with an error.
 
         Documented error messages (returned in the `errors` field): "newsafety parameter is required", "newsafety must be a number", "newsafety cannot be negative", "newsafety cannot exceed X", "Ratcheting to 0 days of buffer requires beemergency=True on the API call", "Goal cannot be ratcheted because it is non-monotonic in the next N days", "Goal cannot be ratcheted (may be archived, ended, or have no buffer)", "Failed to ratchet goal".
+      x-unverified: true
+      x-unverified-note: JSON body not measured; the reference shows form-encoded examples.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
@@ -495,9 +507,11 @@ paths:
                 beemergency:
                   type: boolean
                   description: Required (as `true`) when `newsafety=0`. The reference also documents the strings "true" and "True" as accepted; the JSON boolean is modelled here. Safety mechanism against accidentally ratcheting to a beemergency.
+                  x-unverified: true
+                  x-unverified-note: A JSON boolean was not measured; the reference's example sends the string "True" in a form body.
       responses:
         '200':
-          description: The updated Goal object. The reference's example errors for this endpoint are `errors` bodies (see Error).
+          description: The updated Goal object. The reference's example errors for this endpoint are `errors` bodies (see ApiError).
           content:
             application/json:
               schema:
@@ -505,7 +519,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/datapoints.json:
     get:
       operationId: listDatapoints
@@ -556,7 +570,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
     post:
       operationId: createDatapoint
       tags: [datapoints]
@@ -583,15 +597,24 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: A datapoint with the same `requestid` already exists and is identical (measured 2026-11-20).
+          description: Validation failure, e.g. duplicate requestid or non-numeric value (both measured 2026-11-20).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                errors: Duplicate request
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                duplicate:
+                  summary: Same `requestid` sent again
+                  value:
+                    errors: Duplicate request
+                validation-value:
+                  summary: Non-numeric `value`
+                  value:
+                    errors:
+                      value:
+                        - is not a number
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/datapoints/create_all.json:
     post:
       operationId: createDatapoints
@@ -639,7 +662,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /users/{username}/goals/{slug}/datapoints/{id}.json:
     put:
       operationId: updateDatapoint
@@ -673,7 +696,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
     delete:
       operationId: deleteDatapoint
       tags: [datapoints]
@@ -693,7 +716,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
   /charges:
     post:
       operationId: createCharge
@@ -705,6 +728,8 @@ paths:
 
         Path: the reference's HTTP Request line says `POST /charges` while its curl example posts to `/charges.json`. Measured unauthenticated on 2026-11-20, both paths exist (each returns 401, while an unknown path returns 404), so `/charges.json` also routes.
       x-charges-money: true
+      x-unverified: true
+      x-unverified-note: JSON body not measured; the reference shows form-encoded examples. Not measured at all, because a real charge bills money.
       requestBody:
         required: true
         content:
@@ -727,7 +752,9 @@ paths:
                   x-unverified-note: Listed as a plain (not bracketed/optional) parameter, yet the text says "optionally add a note". Treated as optional.
                 dryrun:
                   type: string
-                  description: If passed, the Charge is not actually created, but its JSON is returned as if it were. Default false. The reference types this parameter as a string (unlike goal creation's `dryrun`, which it types as a boolean).
+                  description: If passed, the Charge is not actually created, but its JSON is returned as if it were. Default false. The reference types this parameter as a string (unlike goal creation's `dryrun`, which it types as a boolean). WARNING - this was never measured; a client must not rely on `dryrun` to avoid charging real money until it has been measured (which values count as "passed", and whether a JSON body honors it, are unknown).
+                  x-unverified: true
+                  x-unverified-note: Never measured, since a wrong guess charges real money. The reference gives only the type (string) and the wording "If passed".
       responses:
         '200':
           description: The Charge object. If the request was not successful, an object with the error message(s) instead.
@@ -742,11 +769,11 @@ paths:
                       required: [errors]
                       properties:
                         errors: {}
-                  - $ref: '#/components/schemas/Error'
+                  - $ref: '#/components/schemas/ApiError'
         '401':
           $ref: '#/components/responses/Unauthorized'
         default:
-          $ref: '#/components/responses/Error'
+          $ref: '#/components/responses/ApiErrorResponse'
 components:
   securitySchemes:
     authToken:
@@ -804,45 +831,46 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/ApiError'
           example:
             errors:
               message: Token missing or incorrect token.
+              token: '...'
     UnprocessableEntity:
-      description: Validation failed (measured 2026-11-20 on a goal update with a non-alphanumeric tag). `errors` maps the field name to a list of messages.
+      description: Validation failure on goal update (measured 2026-11-20 with a non-alphanumeric tag). `errors` maps the field name to a list of messages.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            errors:
-              tags:
-                - must each be alphanumeric
-    Error:
+            $ref: '#/components/schemas/ApiError'
+          examples:
+            validation-tags:
+              summary: Non-alphanumeric tag
+              value:
+                errors:
+                  tags:
+                    - must each be alphanumeric
+    ApiErrorResponse:
       description: Error. The reference documents the body shape only by example, and does not document HTTP status codes.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/ApiError'
   schemas:
-    Error:
+    ApiError:
       type: object
       description: |
-        Error body. `errors` is a string in the reference's examples (`{"errors": "Can't uncle a goal that's not in the red."}`), an object with a `message` string (measured 401 body, 2026-11-20), or, per the reference for charges, "an object with the error message(s)".
+        Error body. `errors` is a string in the reference's examples (`{"errors": "Can't uncle a goal that's not in the red."}`; measured also: `{"errors": "Duplicate request"}`) or an object. Measured object shapes (2026-11-20): a 401 has string values (`message` and `token`), and a validation failure maps a field name to a list of messages (`{"value": ["is not a number"]}`).
       x-unverified: true
       x-unverified-note: The reference only shows string-valued `errors`; the object form comes from live measurements (401 and 422, 2026-11-20). HTTP status codes for errors other than the measured 401 and 422 are not documented.
       required:
         - errors
       properties:
         errors:
-          description: Error message(s).
+          description: Error message(s), as a string or as an object.
           oneOf:
             - type: string
             - type: object
-              description: 'Measured shapes (2026-11-20) are `{"message": "..."}` for a 401 and `{"tags": ["must each be alphanumeric"]}` for a 422, so values are strings or arrays of strings.'
-              properties:
-                message:
-                  type: string
+              description: Values are strings (401 body) or arrays of strings (field to messages, validation failures).
               additionalProperties:
                 oneOf:
                   - type: string
@@ -850,14 +878,14 @@ components:
                     items:
                       type: string
     GoalResult:
-      description: A Goal, or an `errors` body. A body that has `errors` only matches Error.
+      description: A Goal, or an `errors` body. A body that has `errors` only matches ApiError.
       anyOf:
         - $ref: '#/components/schemas/Goal'
           not:
             required: [errors]
             properties:
               errors: {}
-        - $ref: '#/components/schemas/Error'
+        - $ref: '#/components/schemas/ApiError'
     GoalType:
       type: string
       description: |
@@ -1069,14 +1097,16 @@ components:
               description: Unix timestamp of when the contract is scheduled to revert to the next lowest pledge amount. Null means not scheduled to revert.
         road:
           type: array
-          description: Array of tuples used to construct the bright red line (graph matrix). Each tuple specifies 2 of 3 of [time, goal, rate]; start from a known (time, value) and fill the missing one forward.
+          description: Array of tuples used to construct the bright red line (graph matrix). Each tuple specifies 2 of 3 of [time, goal, rate]; start from a known (time, value) and fill the missing one forward. Rows are 3-element [time, goal, rate] tuples with one null (the reference defines `roadall` as "like `road`" with extra first and last rows of that form).
           items:
             type: array
+            minItems: 3
+            maxItems: 3
             items:
               type: [number, 'null']
         roadall:
           type: array
-          description: Like `road` but with an additional initial row [initday, initval, null] and a final row [goaldate, goalval, rate], one of which is also null.
+          description: Like `road` but with an additional initial row [initday, initval, null] and a final row [goaldate, goalval, rate], one of which is also null. Rows are 3-element tuples (per the reference).
           items:
             type: array
             minItems: 3
@@ -1085,7 +1115,7 @@ components:
               type: [number, 'null']
         fullroad:
           type: [array, 'null']
-          description: Like `roadall` but with the nulls filled in, so rows contain no nulls. The whole attribute may be null if the goal is in an error state.
+          description: Like `roadall` but with the nulls filled in, so rows are 3-element tuples with no nulls (per the reference). The whole attribute may be null if the goal is in an error state.
           items:
             type: array
             minItems: 3
