@@ -186,6 +186,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '422':
           description: Validation failure. Inferred from the goal update endpoint (measured there); not measured on create.
+          x-unverified: true
+          x-unverified-note: The 422 status and body were measured on goal update, not on goal create.
           content:
             application/json:
               schema:
@@ -254,6 +256,7 @@ paths:
       summary: Update a goal for a user
       description: |
         Update the user's goal with slug `slug`. Similar to goal creation, but `goal_type` cannot be changed.
+        JSON body measured 2026-11-20 with `tags` and `title` only; the other fields are assumed to parse the same way.
         To change any of `goaldate`, `goalval`, `rate`, use `roadall`.
         The `roadall` note about changing rate units in the same call implies `runits` can be sent here, but the reference does not list `runits` as a parameter of this endpoint (or of goal creation), so it is not modelled.
       parameters:
@@ -668,7 +671,7 @@ paths:
       operationId: updateDatapoint
       tags: [datapoints]
       summary: Update a datapoint
-      description: Update the datapoint with the given ID for the user's goal.
+      description: "Update the datapoint with the given ID for the user's goal. JSON body measured 2026-11-20 (value and comment)."
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
