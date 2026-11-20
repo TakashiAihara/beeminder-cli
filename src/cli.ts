@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { Command, CommanderError } from "commander";
 
-import packageJson from "../package.json";
 import {
   createDatapoint,
   deleteDatapoint,
@@ -12,6 +11,7 @@ import {
 } from "./generated/index.ts";
 import type { DatapointInput } from "./generated/model/index.ts";
 import { fail, reportError } from "./errors.ts";
+import { VERSION } from "./version.ts";
 
 type UserOpts = { user: string };
 type AddOpts = UserOpts & { comment?: string; requestid?: string; daystamp?: string };
@@ -37,11 +37,7 @@ const check = (label: string, value: string, re: RegExp): void => {
 
 const program = new Command();
 
-program
-  .name("beeminder")
-  .description("CLI for the Beeminder API")
-  .version(packageJson.version)
-  .exitOverride();
+program.name("beeminder").description("CLI for the Beeminder API").version(VERSION).exitOverride();
 
 const withUser = (cmd: Command): Command =>
   cmd.option("--user <username>", "Beeminder username", "me");

@@ -4,6 +4,25 @@ CLI for the [Beeminder API](https://api.beeminder.com/): read the user and goals
 
 ## Install
 
+Install a released binary with `install.sh`. It stops without installing when the checksum does not match.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/beeminder-cli/main/install.sh | sh
+```
+
+To pin a tag, put the variable on the `sh` side; on the `curl` side it never reaches install.sh and latest is installed.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TakashiAihara/beeminder-cli/main/install.sh | BEEMINDER_CLI_VERSION=v0.1.0 sh
+```
+
+- `BEEMINDER_CLI_VERSION` defaults to `latest`, which is resolved to a tag once; both the binary and `SHA256SUMS` come from that tag.
+- `BEEMINDER_CLI_INSTALL_DIR` changes the install location (default `$HOME/.local/bin`).
+- `BEEMINDER_CLI_VERIFY_ATTESTATION=1` also verifies the build provenance with `gh`; without `gh`, or when verification fails, it stops without installing.
+- To fetch the files by hand, use the `beeminder-cli-<os>-<arch>` and `SHA256SUMS` assets on [Releases](https://github.com/TakashiAihara/beeminder-cli/releases); os is `linux` / `darwin`, arch is `x64` / `arm64`.
+
+To run from source instead:
+
 ```bash
 mise install
 bun install
