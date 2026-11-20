@@ -34,6 +34,5 @@ export function reportError(err: unknown): never {
   if (err instanceof ApiResponseError) {
     fail(errorBodyText(err.body), err.status === 401 ? 2 : 1);
   }
-  if (err instanceof NetworkError) fail(err.message, 1);
   fail(err instanceof Error ? err.message : String(err), 1);
 }
