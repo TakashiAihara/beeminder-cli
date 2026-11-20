@@ -12,6 +12,23 @@ const API = process.env.BEEMINDER_API_BASE ?? "https://www.beeminder.com/api/v1"
 const TOKEN = token ?? "";
 const GOAL = goal ?? "";
 
+// Each real-API call can take a few seconds; Bun's 5 s default would cut a test short.
+const HOOK_TIMEOUT_MS = 60_000;
+
+// The direct cleanup below sends the token in the query, so it applies the same
+// https-or-loopback rule as the CLI does.
+const assertSafeApiBase = (): void => {
+  const url = new URL(API);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error(`refusing to send the token to a non-https API base: ${url.origin}`);
+  }
+};
+
+// Set only after the goal passed the safety check, so afterAll never deletes from a
+// goal that beforeAll rejected.
+let safeToClean = false;
+
 type Datapoint = { id: string; value: number; comment?: string; requestid?: string };
 
 if (!configured && required) {
@@ -79,52 +96,68 @@ const removeLeftovers = async (): Promise<void> => {
 
 describe.skipIf(!configured)("real Beeminder API (goal from BEEMINDER_TEST_GOAL)", () => {
   beforeAll(async () => {
+    assertSafeApiBase();
     const found = (await directFetch("GET", `${GOAL}.json`)) as { aggday?: string };
     if (found.aggday !== "sum") {
       throw new Error(
         `goal ${GOAL} has aggday ${JSON.stringify(found.aggday)}, expected "sum": the value-0 test datapoints could otherwise change the goal's progress`,
       );
     }
+    safeToClean = true;
     await removeLeftovers();
-  });
+  }, HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
-    await removeLeftovers();
-  });
+    if (safeToClean) await removeLeftovers();
+  }, HOOK_TIMEOUT_MS);
 
-  test("add, read back and delete a datapoint", async () => {
-    const requestid = `${PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const comment = `${PREFIX}${requestid}`;
+  test(
+    "add, read back and delete a datapoint",
+    async () => {
+      const requestid = `${PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const comment = `${PREFIX}${requestid}`;
 
-    const added = await cli(["add", GOAL, "0", "--comment", comment, "--requestid", requestid]);
-    expect(added.exitCode).toBe(0);
-    const created = JSON.parse(added.stdout) as Datapoint;
-    expect(typeof created.id).toBe("string");
-    expect(created.requestid).toBe(requestid);
+      const added = await cli(["add", GOAL, "0", "--comment", comment, "--requestid", requestid]);
+      expect(added.exitCode).toBe(0);
+      const created = JSON.parse(added.stdout) as Datapoint;
+      expect(typeof created.id).toBe("string");
+      expect(created.requestid).toBe(requestid);
 
-    const listed = await cli(["datapoints", GOAL]);
-    expect(listed.exitCode).toBe(0);
-    const found = (JSON.parse(listed.stdout) as Datapoint[]).find((p) => p.id === created.id);
-    expect(found?.comment).toBe(comment);
-    expect(found?.value).toBe(0);
+      const listed = await cli(["datapoints", GOAL]);
+      expect(listed.exitCode).toBe(0);
+      const found = (JSON.parse(listed.stdout) as Datapoint[]).find((p) => p.id === created.id);
+      expect(found?.comment).toBe(comment);
+      expect(found?.value).toBe(0);
 
-    const deleted = await cli(["delete", GOAL, created.id]);
-    expect(deleted.exitCode).toBe(0);
-    expect((JSON.parse(deleted.stdout) as Datapoint).id).toBe(created.id);
+      const deleted = await cli(["delete", GOAL, created.id]);
+      expect(deleted.exitCode).toBe(0);
+      expect((JSON.parse(deleted.stdout) as Datapoint).id).toBe(created.id);
 
-    const after = await cli(["datapoints", GOAL]);
-    expect((JSON.parse(after.stdout) as Datapoint[]).some((p) => p.id === created.id)).toBe(false);
-  });
+      const after = await cli(["datapoints", GOAL]);
+      expect((JSON.parse(after.stdout) as Datapoint[]).some((p) => p.id === created.id)).toBe(
+        false,
+      );
+    },
+    HOOK_TIMEOUT_MS,
+  );
 
-  test("read commands never print the token", async () => {
-    for (const args of [["user"], ["goals"], ["goal", GOAL]]) {
-      const res = await cli(args);
-      expect(res.exitCode).toBe(0);
-    }
-  });
+  test(
+    "read commands never print the token",
+    async () => {
+      for (const args of [["user"], ["goals"], ["goal", GOAL]]) {
+        const res = await cli(args);
+        expect(res.exitCode).toBe(0);
+      }
+    },
+    HOOK_TIMEOUT_MS,
+  );
 
-  test("an invalid token exits 2 and is not echoed", async () => {
-    const res = await cli(["user"], "not+a/real=token");
-    expect(res.exitCode).toBe(2);
-  });
+  test(
+    "an invalid token exits 2 and is not echoed",
+    async () => {
+      const res = await cli(["user"], "not+a/real=token");
+      expect(res.exitCode).toBe(2);
+    },
+    HOOK_TIMEOUT_MS,
+  );
 });

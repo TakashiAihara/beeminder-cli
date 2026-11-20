@@ -32,7 +32,7 @@ Goal creation, goal updates and every money-charging endpoint (`x-charges-money`
 | `BEEMINDER_API_BASE` | API base URL | `https://www.beeminder.com/api/v1` |
 | `BEEMINDER_TIMEOUT_MS` | request timeout in ms | `30000` |
 
-- The token is never printed, never put in argv, and never written to stderr (also not inside error messages that echo a URL).
+- The token is never put in argv, and it is redacted (raw and URL-encoded) from everything the CLI writes to stderr, including error bodies that echo it. stdout is the API response body unchanged; the CLI does not rewrite it.
 - `BEEMINDER_API_BASE` exists so tests can point the CLI at a mock server; it is also usable for any compatible endpoint. It must be `https://`, except for `localhost` / `127.0.0.1` / `[::1]` where `http://` is allowed; anything else is a usage error (exit 3), so the token is never sent in cleartext.
 - `BEEMINDER_API_BASE` must not contain the characters `?` or `#` at all (even a bare trailing `?` or `#`, which `URL` reports as an empty query or fragment): the CLI appends the path and `auth_token` itself, so either would corrupt the URL. It is a usage error (exit 3, no request).
 - Every request has a timeout (30 s by default). `BEEMINDER_TIMEOUT_MS` overrides it so tests can shorten it; it must match `^[0-9]+$` and be between 1 and 600000 (milliseconds). Anything else (`0`, `1e20`, ` 200 `, `0x1f4`, `abc`, `-1`) is a usage error (exit 3, no request). Empty or unset means the default.
@@ -49,7 +49,7 @@ Measured on 2026-11-20 against a test account:
 
 So the CLI sends `auth_token` in the JSON body for POST/PUT, and as a query parameter for GET/DELETE (no body).
 
-Trade-off: for GET/DELETE the token is in the URL query, which the API server (and any TLS-terminating proxy in front of it) may log. The API offers no other way to authenticate a GET with a personal token (Bearer is rejected), so this is accepted. The token never appears in argv, stdout or stderr.
+Trade-off: for GET/DELETE the token is in the URL query, which the API server (and any TLS-terminating proxy in front of it) may log. The API offers no other way to authenticate a GET with a personal token (Bearer is rejected), so this is accepted. The token never appears in argv, and is redacted from stderr.
 
 ## Exit codes
 
