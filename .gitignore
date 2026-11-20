@@ -1,0 +1,11 @@
+node_modules/
+dist
+coverage
+*.log
+*.tsbuildinfo
+.env
+.env.test
+tmp
+.claude
+# kaneo session attach local state
+.kaneo.json
