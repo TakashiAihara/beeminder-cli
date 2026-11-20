@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { http } from "../../src/http.ts";
+import { http, requestTimeoutMs } from "../../src/http.ts";
 import { startHang } from "../acceptance/helpers.ts";
 
 type EnvName = "BEEMINDER_AUTH_TOKEN" | "BEEMINDER_API_BASE" | "BEEMINDER_TIMEOUT_MS";
@@ -38,5 +38,17 @@ describe("http timeout", () => {
     ]);
     expect(outcome).toContain(base.host);
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
+
+describe("requestTimeoutMs default", () => {
+  test("is 30000 when BEEMINDER_TIMEOUT_MS is unset", () => {
+    delete process.env.BEEMINDER_TIMEOUT_MS;
+    expect(requestTimeoutMs()).toBe(30000);
+  });
+
+  test("is 30000 when BEEMINDER_TIMEOUT_MS is empty", () => {
+    process.env.BEEMINDER_TIMEOUT_MS = "";
+    expect(requestTimeoutMs()).toBe(30000);
   });
 });

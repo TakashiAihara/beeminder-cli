@@ -19,7 +19,7 @@ Goal creation, goal updates and every money-charging endpoint (`x-charges-money`
 
 - Every command accepts `--user <username>`. The default is `me`, which works with a personal auth token (measured 2026-11-20).
 - stdout carries only the API response body as JSON (pretty-printed is fine). Logs and errors go to stderr.
-- `<value>` must be a plain decimal number (optional sign, digits, optional fraction; no hex, binary, exponent or surrounding spaces); otherwise the command fails with a usage error before any request.
+- `<value>` must be a plain decimal number (optional sign, digits, optional fraction; no hex, binary, exponent or surrounding spaces); otherwise the command fails with a usage error before any request. A negative value needs `--` before it (`beeminder add <slug> -- -1.5`), because commander parses `-1.5` as an option.
 - `--daystamp` must be `YYYYMMDD` (8 digits); otherwise usage error before any request.
 - `--user`, `<slug>` and `<id>` are inserted into the URL path, so they are validated before any request: `--user` and `<slug>` must match `^[A-Za-z0-9_-]+$`, `<id>` must match `^[A-Za-z0-9]+$`. Anything else (`/`, `?`, `#`, `..`, spaces) is a usage error. Without this, a slug like `g/uncleme.json?` would reach an endpoint that charges money. The allowed characters are an assumption (the reference does not specify them); widen them only after measuring.
 - `beeminder --version` prints the version from `package.json` and exits 0.
@@ -34,7 +34,10 @@ Goal creation, goal updates and every money-charging endpoint (`x-charges-money`
 
 - The token is never printed, never put in argv, and never written to stderr (also not inside error messages that echo a URL).
 - `BEEMINDER_API_BASE` exists so tests can point the CLI at a mock server; it is also usable for any compatible endpoint. It must be `https://`, except for `localhost` / `127.0.0.1` / `[::1]` where `http://` is allowed; anything else is a usage error (exit 3), so the token is never sent in cleartext.
-- Every request has a timeout (30 s by default; `BEEMINDER_TIMEOUT_MS` overrides it so tests can shorten it). A timeout is a network failure (exit 1) and the message names the host.
+- `BEEMINDER_API_BASE` must not contain a query or fragment (`?` or `#`): the CLI appends the path and `auth_token` itself, so either would corrupt the URL. It is a usage error (exit 3, no request).
+- Every request has a timeout (30 s by default). `BEEMINDER_TIMEOUT_MS` overrides it so tests can shorten it; it must match `^[0-9]+$` and be between 1 and 600000 (milliseconds). Anything else (`0`, `1e20`, ` 200 `, `0x1f4`, `abc`, `-1`) is a usage error (exit 3, no request). Empty or unset means the default.
+- The timeout covers the whole request, including reading the response body. A timeout at any point is a network failure (exit 1) and the message names `host:port`.
+- Redirects are never followed, because the token may be in the URL query. A 3xx response is an API error: exit 1, stderr `HTTP <status>` (plus `: <errors>` if the body has errors).
 
 ## Authentication placement
 

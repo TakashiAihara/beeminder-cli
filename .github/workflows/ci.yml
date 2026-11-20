@@ -24,3 +24,6 @@ jobs:
       - run: bun run test
       - run: bun run generate
       - run: git diff --exit-code -- src/generated
+      - run: |
+          git status --porcelain -- src/generated
+          test -z "$(git status --porcelain -- src/generated)"

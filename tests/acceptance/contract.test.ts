@@ -7,6 +7,7 @@ import {
   runCli,
   startFake,
   startHang,
+  startStall,
 } from "./helpers.ts";
 
 const fakes: { stop: () => void }[] = [];
@@ -158,6 +159,63 @@ describe("request timeout", () => {
     expect(res.stderr).toContain(new URL(hang.base).host);
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
+
+  test("a server that sends headers and then stalls the body ends with exit 1 naming host:port", async () => {
+    const stall = startStall();
+    fakes.push(stall);
+    const started = Date.now();
+    const res = await runCli(["user"], {
+      base: stall.base,
+      env: { BEEMINDER_TIMEOUT_MS: "500" },
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain(new URL(stall.base).host);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
+});
+
+describe("BEEMINDER_API_BASE query and fragment", () => {
+  test.each(["?x=1", "#f"])("a base ending in %p exits 3 and sends nothing", async (suffix) => {
+    const f = fake();
+    const res = await runCli(["user"], { base: `${f.base}${suffix}` });
+    expect(res.exitCode).toBe(3);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain("BEEMINDER_API_BASE");
+    expect(f.requests).toHaveLength(0);
+  });
+
+  test.each(["?x=1", "#f"])(
+    "a shorter base ending in /api%s exits 3 and sends nothing",
+    async (suffix) => {
+      const f = fake();
+      const port = new URL(f.base).port;
+      const res = await runCli(["user"], { base: `http://127.0.0.1:${port}/api${suffix}` });
+      expect(res.exitCode).toBe(3);
+      expect(res.stderr).toContain("BEEMINDER_API_BASE");
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+});
+
+describe("redirects are never followed", () => {
+  test.each([
+    ["GET user, 302", ["user"], 302],
+    ["POST add, 307", ["add", "readbook", "1"], 307],
+  ] as const)("%s is an API error and the target gets no request", async (_n, args, status) => {
+    const target = fake();
+    const source = fake(() => ({
+      status,
+      body: null,
+      headers: { location: `${target.base}/users/me.json` },
+    }));
+    const res = await runCli([...args], { base: source.base });
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr.startsWith(`HTTP ${status}`)).toBe(true);
+    expect(source.requests).toHaveLength(1);
+    expect(target.requests).toHaveLength(0);
+  });
 });
 
 describe("token redaction", () => {
@@ -264,13 +322,23 @@ describe("BEEMINDER_TIMEOUT_MS parsing and default", () => {
     return started;
   };
 
-  test.each(["abc", "-1"])("%p exits 3 and sends nothing", async (value) => {
+  test.each(["abc", "-1", "0", "1e20", " 200 ", "0x1f4", "1.5", "600001"])(
+    "%p exits 3 and sends nothing",
+    async (value) => {
+      const f = fake();
+      const res = await runCli(["user"], { base: f.base, env: { BEEMINDER_TIMEOUT_MS: value } });
+      expect(res.exitCode).toBe(3);
+      expect(res.stdout).toBe("");
+      expect(res.stderr).toContain("BEEMINDER_TIMEOUT_MS");
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+
+  test("the upper bound 600000 is accepted", async () => {
     const f = fake();
-    const res = await runCli(["user"], { base: f.base, env: { BEEMINDER_TIMEOUT_MS: value } });
-    expect(res.exitCode).toBe(3);
-    expect(res.stdout).toBe("");
-    expect(res.stderr).toContain("BEEMINDER_TIMEOUT_MS");
-    expect(f.requests).toHaveLength(0);
+    const res = await runCli(["user"], { base: f.base, env: { BEEMINDER_TIMEOUT_MS: "600000" } });
+    expect(res.exitCode).toBe(0);
+    expect(f.requests).toHaveLength(1);
   });
 
   test("an empty value uses the default, so a 300 ms answer still succeeds", async () => {
@@ -281,7 +349,7 @@ describe("BEEMINDER_TIMEOUT_MS parsing and default", () => {
     expect(f.requests).toHaveLength(1);
   });
 
-  test("the default allows a 1.5 s answer to succeed", async () => {
+  test("without BEEMINDER_TIMEOUT_MS a 1.5 s answer still succeeds", async () => {
     const f = slowFake(1500);
     const res = await runCli(["user"], { base: f.base });
     expect(res.exitCode).toBe(0);

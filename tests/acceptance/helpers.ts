@@ -62,8 +62,14 @@ export const runCli = async (args: string[], opts: RunOptions): Promise<CliResul
   ]);
   clearTimeout(timer);
 
-  expect(stdout).not.toContain(TOKEN);
-  expect(stderr).not.toContain(TOKEN);
+  // The token the child actually got, not the default: a test may pass its own.
+  const sent = env.BEEMINDER_AUTH_TOKEN;
+  if (sent) {
+    for (const form of [sent, encodeURIComponent(sent)]) {
+      expect(stdout).not.toContain(form);
+      expect(stderr).not.toContain(form);
+    }
+  }
   return { exitCode, stdout, stderr };
 };
 
@@ -93,7 +99,13 @@ export type Fake = {
 };
 
 // text, when set, is sent as a text/plain body instead of the JSON body.
-export type FakeReply = { status: number; body: unknown; text?: string };
+// headers are added to the response, e.g. Location for a redirect.
+export type FakeReply = {
+  status: number;
+  body: unknown;
+  text?: string;
+  headers?: Record<string, string>;
+};
 
 const defaultReply = (req: RecordedRequest): FakeReply => ({
   status: 200,
@@ -109,11 +121,14 @@ export const startFake = (reply: (req: RecordedRequest) => FakeReply = defaultRe
     fetch: async (req) => {
       const recorded = await record(req);
       requests.push(recorded);
-      const { status, body, text } = reply(recorded);
+      const { status, body, text, headers } = reply(recorded);
       if (text !== undefined) {
-        return new Response(text, { status, headers: { "content-type": "text/plain" } });
+        return new Response(text, {
+          status,
+          headers: { "content-type": "text/plain", ...headers },
+        });
       }
-      return Response.json(body, { status });
+      return Response.json(body, { status, headers });
     },
   });
   return {
@@ -126,6 +141,28 @@ export const startFake = (reply: (req: RecordedRequest) => FakeReply = defaultRe
 // Accepts the TCP connection and never answers, so only a client-side timeout can end the request.
 export const startHang = (): { base: string; stop: () => void } => {
   const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  return {
+    base: `http://127.0.0.1:${server.port}/api/v1`,
+    stop: () => void server.stop(true),
+  };
+};
+
+// Sends the status line and headers plus the first byte of a body, then never finishes the body,
+// so only a timeout that also covers reading the body can end the request.
+export const startStall = (): { base: string; stop: () => void } => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("["));
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  });
   return {
     base: `http://127.0.0.1:${server.port}/api/v1`,
     stop: () => void server.stop(true),
