@@ -133,7 +133,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               required: [slug, title, goal_type, gunits]
@@ -178,8 +178,6 @@ paths:
                   items:
                     type: string
                     pattern: '^[A-Za-z0-9]+$'
-                  x-unverified: true
-                  x-unverified-note: The reference does not say how an array is encoded in a form body (repeated `tags[]`, JSON string, etc.).
       responses:
         '200':
           description: The newly created Goal object.
@@ -189,6 +187,8 @@ paths:
                 $ref: '#/components/schemas/Goal'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/archived.json:
@@ -254,7 +254,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               properties:
@@ -291,18 +291,16 @@ paths:
                     items:
                       type: [number, string, 'null']
                   x-unverified: true
-                  x-unverified-note: The reference does not say how a nested array is encoded in a form body. Row element types are number, null, or (for dates) a daystamp/date string.
+                  x-unverified-note: Sent as a real JSON array of arrays. Not measured against the live API (only `tags` and `datapoints` bodies were), including whether JSON null cells are accepted in rows. Row element types are number, null, or (for dates) a daystamp/date string per the reference.
                 datasource:
                   type: string
                   description: 'One of "api", "ifttt", "zapier", or a registered client name. Pass the empty string to unset the datasource (return to manual entry). If the registered client name has an `autofetch_callback_url`, Beeminder POSTs to it when the goal wants new data.'
                 tags:
                   type: [array, 'null']
-                  description: List of tags for the goal. Each tag must be alphanumeric. Replaces the existing tags; an empty array or explicit null removes all tags.
+                  description: List of tags for the goal. Each tag must be alphanumeric (a non-alphanumeric tag returns 422). Replaces the existing tags; an empty array or explicit null removes all tags. Measured 2026-11-20 with a JSON body, a tag array sets the tags and `[]` clears them; explicit null is documented but was not measured.
                   items:
                     type: string
                     pattern: '^[A-Za-z0-9]+$'
-                  x-unverified: true
-                  x-unverified-note: The reference does not say how an array or null is encoded in a form body.
       responses:
         '200':
           description: The updated Goal object.
@@ -312,6 +310,8 @@ paths:
                 $ref: '#/components/schemas/Goal'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/refresh_graph.json:
@@ -353,7 +353,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               properties:
@@ -483,7 +483,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               required: [newsafety]
@@ -493,9 +493,8 @@ paths:
                   minimum: 0
                   description: Target safety buffer to ratchet down to (days for do-more goals, units for do-less goals). Must be between 0 and the current maximum ratchetable amount.
                 beemergency:
-                  type: string
-                  enum: ['true', 'True']
-                  description: Required when `newsafety=0`. The reference accepts `true`, "true" or "True"; in a form body all three are the same text, so the values are `true` and `True`. Safety mechanism against accidentally ratcheting to a beemergency.
+                  type: boolean
+                  description: Required (as `true`) when `newsafety=0`. The reference also documents the strings "true" and "True" as accepted; the JSON boolean is modelled here. Safety mechanism against accidentally ratcheting to a beemergency.
       responses:
         '200':
           description: The updated Goal object. The reference's example errors for this endpoint are `errors` bodies (see Error).
@@ -564,27 +563,33 @@ paths:
       summary: Create a datapoint
       description: |
         Add a new datapoint to the user's goal.
-        This is an upsert and `requestid` is an idempotency key: if a datapoint with the same `requestid` exists and is identical, the request is ignored (the API returns "duplicate datapoint"); if it differs, the datapoint is updated; otherwise it is created.
-      x-unverified: true
-      x-unverified-note: The reference does not say what the "duplicate datapoint" response looks like (status code, whether it is an error object or a bare string). The 200 schema accepts a Datapoint, an Error body, or a plain string to cover those readings.
+        This is an upsert and `requestid` is an idempotency key: if a datapoint with the same `requestid` exists and is identical, the request is ignored (the reference says the API returns "duplicate datapoint"; measured 2026-11-20, that is HTTP 422 with `{"errors": "Duplicate request"}`); if it differs, the datapoint is updated; otherwise it is created.
       parameters:
         - $ref: '#/components/parameters/Username'
         - $ref: '#/components/parameters/GoalSlug'
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               $ref: '#/components/schemas/DatapointInput'
       responses:
         '200':
-          description: The created or updated Datapoint object, or the "duplicate datapoint" response when an identical datapoint with the same `requestid` already exists.
+          description: The created or updated Datapoint object.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DatapointResult'
+                $ref: '#/components/schemas/Datapoint'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: A datapoint with the same `requestid` already exists and is identical (measured 2026-11-20).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                errors: Duplicate request
         default:
           $ref: '#/components/responses/Error'
   /users/{username}/goals/{slug}/datapoints/create_all.json:
@@ -599,22 +604,19 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               required: [datapoints]
               properties:
                 datapoints:
                   type: array
-                  description: Array of datapoint objects (see DatapointInput), each with at least `value`. Sent as a single form field whose value is the JSON-encoded array, as in the reference's curl example (`-d datapoints=[{"timestamp":...,"value":...}, ...]`).
+                  description: Array of datapoint objects (see DatapointInput), each with at least `value`. Sent as a real JSON array (measured 2026-11-20). A form body whose `datapoints` field is a JSON-encoded string, as in the reference's curl example, was also accepted.
                   items:
                     $ref: '#/components/schemas/DatapointInput'
-            encoding:
-              datapoints:
-                contentType: application/json
       responses:
         '200':
-          description: A list of successfully created Datapoints, or, in the case of any errors, an object with two lists `successes` and `errors`.
+          description: 'A list of successfully created Datapoints (measured 2026-11-20: a plain JSON array of Datapoint objects). In the case of any errors the reference says the response is instead an object with two lists `successes` and `errors`; that branch is from the reference and was not measured.'
           content:
             application/json:
               schema:
@@ -651,7 +653,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               properties:
@@ -706,7 +708,7 @@ paths:
       requestBody:
         required: true
         content:
-          application/x-www-form-urlencoded:
+          application/json:
             schema:
               type: object
               required: [user_id, amount]
@@ -753,7 +755,8 @@ components:
       name: auth_token
       description: |
         Personal authentication token, for API calls to your own account. Get it by logging in and visiting https://www.beeminder.com/api/v1/auth_token.json.
-        The reference says to append it as an additional GET or POST parameter, so for POST/PUT requests it may also be sent in the form body (not expressible as a security scheme).
+        The reference says to append it as an additional GET or POST parameter. Measured 2026-11-20: for POST/PUT it can also be sent as `auth_token` in the JSON request body with no query parameter (200), which keeps the token out of URLs and logs. A body parameter cannot be expressed as a security scheme, so this scheme declares only the query form.
+        Measured 2026-11-20: the personal token is not accepted as `Authorization: Bearer <auth_token>` (401); the Bearer scheme is for OAuth access tokens only.
         Do not name this parameter `access_token`.
     accessTokenQuery:
       type: apiKey
@@ -763,7 +766,7 @@ components:
     accessTokenBearer:
       type: http
       scheme: bearer
-      description: 'OAuth access token sent as `Authorization: Bearer <token>`. Obtain it by sending the user to https://www.beeminder.com/apps/authorize with `client_id`, `redirect_uri` and `response_type=token`; the token is returned in the redirect query string as `access_token` (plus `username`).'
+      description: 'OAuth access token only (a personal `auth_token` sent this way returns 401, measured 2026-11-20), sent as `Authorization: Bearer <token>`. Obtain it by sending the user to https://www.beeminder.com/apps/authorize with `client_id`, `redirect_uri` and `response_type=token`; the token is returned in the redirect query string as `access_token` (plus `username`).'
   parameters:
     Username:
       name: username
@@ -805,6 +808,16 @@ components:
           example:
             errors:
               message: Token missing or incorrect token.
+    UnprocessableEntity:
+      description: Validation failed (measured 2026-11-20 on a goal update with a non-alphanumeric tag). `errors` maps the field name to a list of messages.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            errors:
+              tags:
+                - must each be alphanumeric
     Error:
       description: Error. The reference documents the body shape only by example, and does not document HTTP status codes.
       content:
@@ -817,7 +830,7 @@ components:
       description: |
         Error body. `errors` is a string in the reference's examples (`{"errors": "Can't uncle a goal that's not in the red."}`), an object with a `message` string (measured 401 body, 2026-11-20), or, per the reference for charges, "an object with the error message(s)".
       x-unverified: true
-      x-unverified-note: The reference only shows string-valued `errors`; the object form comes from a live measurement. HTTP status codes for errors other than the measured 401 are not documented.
+      x-unverified-note: The reference only shows string-valued `errors`; the object form comes from live measurements (401 and 422, 2026-11-20). HTTP status codes for errors other than the measured 401 and 422 are not documented.
       required:
         - errors
       properties:
@@ -826,10 +839,16 @@ components:
           oneOf:
             - type: string
             - type: object
+              description: 'Measured shapes (2026-11-20) are `{"message": "..."}` for a 401 and `{"tags": ["must each be alphanumeric"]}` for a 422, so values are strings or arrays of strings.'
               properties:
                 message:
                   type: string
-              additionalProperties: true
+              additionalProperties:
+                oneOf:
+                  - type: string
+                  - type: array
+                    items:
+                      type: string
     GoalResult:
       description: A Goal, or an `errors` body. A body that has `errors` only matches Error.
       anyOf:
@@ -839,16 +858,6 @@ components:
             properties:
               errors: {}
         - $ref: '#/components/schemas/Error'
-    DatapointResult:
-      description: A Datapoint, an `errors` body, or the plain string "duplicate datapoint". A body that has `errors` only matches Error.
-      anyOf:
-        - $ref: '#/components/schemas/Datapoint'
-          not:
-            required: [errors]
-            properties:
-              errors: {}
-        - $ref: '#/components/schemas/Error'
-        - type: string
     GoalType:
       type: string
       description: |
@@ -1218,6 +1227,13 @@ components:
           description: The timestamp at which the datapoint was created, which may differ from `timestamp`.
           x-unverified: true
           x-unverified-note: The reference gives the type as "time" without saying whether it is a Unix number or a formatted string.
+        status:
+          type: string
+          description: Observed in live responses 2026-11-20, not in the reference (e.g. "created").
+        urtext:
+          description: Observed in live responses 2026-11-20, not in the reference. The value type was not recorded, so none is declared.
+        fulltext:
+          description: Observed in live responses 2026-11-20, not in the reference. The value type was not recorded, so none is declared.
     DatapointInput:
       type: object
       required: [value]
