@@ -22,7 +22,9 @@ const apiBase = (): { base: string; host: string } => {
       `BEEMINDER_API_BASE must be https (http only for localhost/127.0.0.1/[::1]): ${JSON.stringify(raw)}`,
     );
   }
-  if (url.search !== "" || url.hash !== "") {
+  // Checked on the raw string: URL drops a bare trailing "?" or "#" into an
+  // empty search/hash, so url.search/url.hash cannot see them.
+  if (/[?#]/.test(raw)) {
     throw new UsageError(
       `BEEMINDER_API_BASE must not contain a query or fragment: ${JSON.stringify(raw)}`,
     );
