@@ -194,3 +194,98 @@ describe("token redaction", () => {
     },
   );
 });
+
+describe("--user is validated by every command that takes it", () => {
+  test.each([
+    ["goal", ["goal", "readbook", "--user", "a/b"]],
+    ["datapoints", ["datapoints", "readbook", "--user", "a/b"]],
+    ["add", ["add", "readbook", "1", "--user", "a/b"]],
+    ["delete", ["delete", "readbook", "abc123", "--user", "a/b"]],
+  ])("%s rejects a user with a slash, exit 3, no request", async (_name, args) => {
+    const f = fake();
+    const res = await runCli(args, { base: f.base });
+    expect(res.exitCode).toBe(3);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain("--user");
+    expect(f.requests).toHaveLength(0);
+  });
+});
+
+describe("add value that overflows to Infinity", () => {
+  test("a 401-digit plain decimal exits 3 and sends nothing", async () => {
+    const f = fake();
+    const res = await runCli(["add", "readbook", `1${"0".repeat(400)}`], { base: f.base });
+    expect(res.exitCode).toBe(3);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain("<value>");
+    expect(f.requests).toHaveLength(0);
+  });
+});
+
+describe("BEEMINDER_API_BASE scheme on loopback hosts", () => {
+  test.each(["ftp://127.0.0.1", "ftp://localhost"])(
+    "%s exits 3 and sends nothing",
+    async (host) => {
+      const f = fake();
+      const port = new URL(f.base).port;
+      const res = await runCli(["user"], { base: `${host}:${port}/api/v1` });
+      expect(res.exitCode).toBe(3);
+      expect(res.stdout).toBe("");
+      expect(res.stderr).toContain("BEEMINDER_API_BASE");
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+});
+
+describe("BEEMINDER_TIMEOUT_MS parsing and default", () => {
+  const slowFake = (delayMs: number): Fake => {
+    const requests: RecordedRequest[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (req) => {
+        requests.push({
+          method: req.method,
+          path: new URL(req.url).pathname,
+          query: new URL(req.url).searchParams,
+          headers: req.headers,
+          body: await req.text(),
+        });
+        await Bun.sleep(delayMs);
+        return Response.json({ username: "alice" });
+      },
+    });
+    const started = {
+      base: `http://127.0.0.1:${server.port}/api/v1`,
+      requests,
+      stop: () => void server.stop(true),
+    };
+    fakes.push(started);
+    return started;
+  };
+
+  test.each(["abc", "-1"])("%p exits 3 and sends nothing", async (value) => {
+    const f = fake();
+    const res = await runCli(["user"], { base: f.base, env: { BEEMINDER_TIMEOUT_MS: value } });
+    expect(res.exitCode).toBe(3);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toContain("BEEMINDER_TIMEOUT_MS");
+    expect(f.requests).toHaveLength(0);
+  });
+
+  test("an empty value uses the default, so a 300 ms answer still succeeds", async () => {
+    const f = slowFake(300);
+    const res = await runCli(["user"], { base: f.base, env: { BEEMINDER_TIMEOUT_MS: "" } });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("alice");
+    expect(f.requests).toHaveLength(1);
+  });
+
+  test("the default allows a 1.5 s answer to succeed", async () => {
+    const f = slowFake(1500);
+    const res = await runCli(["user"], { base: f.base });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("alice");
+    expect(f.requests).toHaveLength(1);
+  });
+});
