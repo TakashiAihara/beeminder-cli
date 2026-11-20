@@ -18,7 +18,7 @@ bun run src/cli.ts --help
 | `BEEMINDER_API_BASE` | API base URL | `https://www.beeminder.com/api/v1` |
 | `BEEMINDER_TIMEOUT_MS` | request timeout in ms | `30000` |
 
-The token is never put in argv, and it is redacted (raw and URL-encoded) from error messages on stderr. stdout is the API response body unchanged.
+The token is never put in argv, and it is redacted (raw and URL-encoded) from error messages on stderr. stdout is the API response body as JSON (re-serialized and pretty-printed, values unchanged).
 
 ## Commands
 
