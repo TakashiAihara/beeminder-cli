@@ -4,6 +4,7 @@ import {
   type FakeReply,
   freePort,
   parseJson,
+  type RecordedRequest,
   runCli,
   startFake,
   TOKEN,
@@ -11,7 +12,7 @@ import {
 
 const fakes: Fake[] = [];
 
-const fake = (reply?: (req: { method: string; path: string }) => FakeReply): Fake => {
+const fake = (reply?: (req: RecordedRequest) => FakeReply): Fake => {
   const started = startFake(reply);
   fakes.push(started);
   return started;
@@ -59,6 +60,26 @@ describe("usage errors", () => {
     const res = await runCli(["add", "readbook", "--", "-1.5"], { base: f.base });
     expect(res.exitCode).toBe(0);
     expect(JSON.parse(f.requests[0]?.body ?? "").value).toBe(-1.5);
+  });
+
+  test.each(["", "  "])(
+    "add rejects the blank value %p with exit 3 before any request",
+    async (value) => {
+      const f = fake();
+      const res = await runCli(["add", "readbook", value], { base: f.base });
+      expect(res.exitCode).toBe(3);
+      expect(res.stdout).toBe("");
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+
+  test("--help exits 0 and prints usage to stdout", async () => {
+    const f = fake();
+    const res = await runCli(["--help"], { base: f.base });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("Usage: beeminder");
+    expect(res.stderr).toBe("");
+    expect(f.requests).toHaveLength(0);
   });
 
   test("add without a value exits 3 before any request", async () => {
@@ -119,7 +140,7 @@ describe("API errors", () => {
     const res = await runCli(["add", "readbook", "1", "--requestid", "r1"], { base: f.base });
     expect(res.exitCode).toBe(1);
     expect(res.stdout).toBe("");
-    expect(res.stderr).toContain("Duplicate request");
+    expect(res.stderr).toBe("Duplicate request\n");
   });
 
   test("a 404 exits 1 and prints the errors body", async () => {
@@ -127,6 +148,31 @@ describe("API errors", () => {
     const res = await runCli(["goal", "nope"], { base: f.base });
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("goal not found");
+  });
+
+  test("a non-JSON error body is printed verbatim and exits 1", async () => {
+    const f = fake(() => ({ status: 500, body: null, text: "boom" }));
+    const res = await runCli(["user"], { base: f.base });
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toBe("boom\n");
+  });
+
+  test("a 401 that echoes the token back exits 2 without printing the token", async () => {
+    const f = fake((req) => ({
+      status: 401,
+      body: {
+        errors: {
+          message: "Token missing or incorrect token.",
+          token: req.query.get("auth_token"),
+        },
+      },
+    }));
+    const res = await runCli(["user"], { base: f.base });
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain("Token missing or incorrect token.");
+    expect(res.stderr).toContain("<redacted>");
+    expect(res.stderr).not.toContain(TOKEN);
   });
 
   test("a network failure exits 1 and names the unreachable host", async () => {
@@ -195,6 +241,17 @@ describe("request shape", () => {
     expect(req?.headers.get("content-type")).toContain("application/json");
     expect(JSON.parse(req?.body ?? "").auth_token).toBe(TOKEN);
   });
+
+  test.each(["/", "//"])(
+    "an API base with trailing slashes %p still hits /users/me.json exactly",
+    async (slashes) => {
+      const f = fake();
+      const res = await runCli(["user"], { base: `${f.base}${slashes}` });
+      expect(res.exitCode).toBe(0);
+      expect(f.requests).toHaveLength(1);
+      expect(f.requests[0]?.path).toBe("/api/v1/users/me.json");
+    },
+  );
 
   test("no request uses an Authorization header", async () => {
     const f = fake();

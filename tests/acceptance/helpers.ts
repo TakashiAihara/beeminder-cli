@@ -89,7 +89,8 @@ export type Fake = {
   stop: () => void;
 };
 
-export type FakeReply = { status: number; body: unknown };
+// text, when set, is sent as a text/plain body instead of the JSON body.
+export type FakeReply = { status: number; body: unknown; text?: string };
 
 const defaultReply = (req: RecordedRequest): FakeReply => ({
   status: 200,
@@ -105,7 +106,10 @@ export const startFake = (reply: (req: RecordedRequest) => FakeReply = defaultRe
     fetch: async (req) => {
       const recorded = await record(req);
       requests.push(recorded);
-      const { status, body } = reply(recorded);
+      const { status, body, text } = reply(recorded);
+      if (text !== undefined) {
+        return new Response(text, { status, headers: { "content-type": "text/plain" } });
+      }
       return Response.json(body, { status });
     },
   });

@@ -15,7 +15,7 @@
     "lint": "oxlint .",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "test": "bun test tests/acceptance",
+    "test": "bun test tests/acceptance tests/unit",
     "test:integration": "bun test tests/integration",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
