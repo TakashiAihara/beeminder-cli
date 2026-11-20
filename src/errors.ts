@@ -29,7 +29,7 @@ const errorText = (status: number, body: unknown): string => {
     body !== null && typeof body === "object" && "errors" in body
       ? (body as { errors: unknown }).errors
       : body;
-  if (errors === null || errors === undefined) return `HTTP ${status}`;
+  if (errors === null) return `HTTP ${status}`;
   return `HTTP ${status}: ${typeof errors === "string" ? errors : JSON.stringify(errors)}`;
 };
 

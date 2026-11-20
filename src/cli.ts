@@ -11,14 +11,14 @@ import {
   listGoals,
 } from "./generated/index.ts";
 import type { DatapointInput } from "./generated/model/index.ts";
-import { fail, redactToken, reportError } from "./errors.ts";
+import { fail, reportError } from "./errors.ts";
 
 type UserOpts = { user: string };
 type AddOpts = UserOpts & { comment?: string; requestid?: string; daystamp?: string };
 
 const respond = async (p: Promise<{ data: unknown }>): Promise<void> => {
   try {
-    process.stdout.write(`${redactToken(JSON.stringify((await p).data, null, 2))}\n`);
+    process.stdout.write(`${JSON.stringify((await p).data, null, 2)}\n`);
   } catch (err) {
     reportError(err);
   }
