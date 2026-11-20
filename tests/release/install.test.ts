@@ -115,9 +115,9 @@ exec ${real} "$@"`,
   );
 }
 
-async function install(env: Record<string, string> = {}) {
+async function install(env: Record<string, string> = {}, script = INSTALL_SH) {
   shimCurl();
-  const proc = Bun.spawn(["/bin/sh", INSTALL_SH], {
+  const proc = Bun.spawn(["/bin/sh", script], {
     cwd: sb.dir,
     env: { PATH: bin, HOME: sb.home, BEEMINDER_CLI_INSTALL_DIR: installDir, ...env },
     stdin: "ignore",
@@ -132,7 +132,7 @@ async function install(env: Record<string, string> = {}) {
   return { out, err, code };
 }
 
-const installed = () => join(installDir, "beeminder-cli");
+const installed = () => join(installDir, "beeminder");
 const leftovers = () =>
   existsSync(installDir) ? readdirSync(installDir).filter((f) => f.startsWith(".")) : [];
 
@@ -248,5 +248,24 @@ describe("install.sh", () => {
       expect(r.out).toContain("attestation ok");
       expect(readFileSync(installed(), "utf8")).toBe(WORKING);
     });
+  });
+
+  // the whole body runs inside main(), which only the last line calls: a download cut off
+  // inside the function is a syntax error, and one cut right after it never calls main.
+  // Either way nothing is fetched and nothing is written.
+  test("a truncated install.sh does nothing", async () => {
+    const lines = readFileSync(INSTALL_SH, "utf8").split("\n");
+    const cut = lines.findIndex((line) => line.includes('curl -fsSL "${base}/${asset}"'));
+    expect(cut).toBeGreaterThan(0);
+    const partial = join(sb.dir, "install-partial.sh");
+    writeFileSync(partial, `${lines.slice(0, cut + 1).join("\n")}\n`);
+
+    startServer({ "v1.0.0": release(WORKING) });
+    const r = await install({}, partial);
+
+    expect(r.code).not.toBe(0);
+    expect(requests).toEqual([]);
+    expect(existsSync(installed())).toBe(false);
+    expect(leftovers()).toEqual([]);
   });
 });

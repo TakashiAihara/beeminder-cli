@@ -49,6 +49,15 @@ describe("nextTag", () => {
     expect(nextTag(["v0.1.0-rc.3", "release-v9.0.0"], FIRST)).toBe("v0.1.0-rc.4");
   });
 
+  // publish-release.sh only releases the strict shape (no leading zeros, at most 9 digits
+  // per number). A tag it would refuse must not raise the next version either: counting
+  // v0.011.0 as 0.11.0 would skip the whole v0.2..v0.10 line
+  test("ignores a tag outside the strict release shape", () => {
+    expect(nextTag(["v0.1.0-rc.3", "v0.011.0"], FIRST)).toBe("v0.1.0-rc.4");
+    expect(nextTag(["v0.1.0-rc.3", "v0.1.0-rc.007"], FIRST)).toBe("v0.1.0-rc.4");
+    expect(nextTag(["v0.1.0-rc.3", "v9999999999.0.0"], FIRST)).toBe("v0.1.0-rc.4");
+  });
+
   test("reads a tag with a trailing carriage return", () => {
     expect(nextTag(["v0.1.0-rc.3\r"], FIRST)).toBe("v0.1.0-rc.4");
   });

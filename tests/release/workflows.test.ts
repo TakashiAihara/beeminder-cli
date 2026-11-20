@@ -10,7 +10,7 @@ const release = () =>
   Bun.YAML.parse(read("release.yml")) as {
     concurrency: { group: string; "cancel-in-progress": boolean };
     jobs: {
-      tag: { steps: { name: string; run?: string }[] };
+      tag: { if?: string; steps: { name: string; run?: string }[] };
       build: { steps: { name: string; run?: string; env?: Record<string, string> }[] };
       publish: {
         permissions?: Record<string, string>;
@@ -26,10 +26,10 @@ const releaseStep = () =>
 
 const REPO = "TakashiAihara/beeminder-cli";
 
-// Nothing at hand evaluates GitHub expressions, so the subset the concurrency expression
-// uses (string ==, &&, ||, parens) is evaluated naively. Same rules as GHA: && returns
-// left when left is falsy, || returns left when truthy, empty string is falsy, and a
-// missing path is the empty string.
+// Nothing at hand evaluates GitHub expressions, so the subset the concurrency and gate
+// expressions use (string ==, !=, &&, ||, parens) is evaluated naively. Same rules as GHA:
+// && returns left when left is falsy, || returns left when truthy, empty string is falsy,
+// and a missing path is the empty string.
 const evaluate = (tokens: string[], context: Record<string, unknown>): string => {
   let i = 0;
   const peek = () => tokens[i];
@@ -50,9 +50,11 @@ const evaluate = (tokens: string[], context: Record<string, unknown>): string =>
   };
   const eq = (): string => {
     const left = atom();
-    if (peek() !== "==") return left;
+    const op = peek();
+    if (op !== "==" && op !== "!=") return left;
     i++;
-    return atom() === left ? "true" : "";
+    const same = atom() === left;
+    return op === "==" ? (same ? "true" : "") : same ? "" : "true";
   };
   const and = (): string => {
     let left = eq();
@@ -82,7 +84,7 @@ const groupFor = (eventName: string, event?: string, headRepository?: string) =>
   const source = release()
     .concurrency.group.replace(/^release-\$\{\{/, "")
     .replace(/\}\}$/, "");
-  const tokens = [...source.matchAll(/\s*('[^']*'|[A-Za-z_][\w.]*|==|&&|\|\||[()])/g)].map(
+  const tokens = [...source.matchAll(/\s*('[^']*'|[A-Za-z_][\w.]*|!=|==|&&|\|\||[()])/g)].map(
     (m) => m[1]!,
   );
   return (
@@ -101,6 +103,32 @@ const groupFor = (eventName: string, event?: string, headRepository?: string) =>
       },
     })
   );
+};
+
+// evaluates the tag job's `if` with a run's event data; "true" means the job runs and a
+// release can start, "" means every job in the run is skipped
+const tagIfFor = (
+  eventName: string,
+  workflowRun?: { conclusion?: string; event?: string; headRepository?: string },
+) => {
+  const tokens = [
+    ...String(release().jobs.tag.if ?? "").matchAll(
+      /\s*('[^']*'|[A-Za-z_][\w.]*|!=|==|&&|\|\||[()])/g,
+    ),
+  ].map((m) => m[1]!);
+  return evaluate(tokens, {
+    github: {
+      event_name: eventName,
+      repository: REPO,
+      event: {
+        workflow_run: {
+          conclusion: workflowRun?.conclusion,
+          event: workflowRun?.event,
+          head_repository: { full_name: workflowRun?.headRepository },
+        },
+      },
+    },
+  });
 };
 
 describe("release.yml concurrency", () => {
@@ -133,6 +161,43 @@ describe("release.yml concurrency", () => {
 
   test("cancel-in-progress is false", () => {
     expect(release().concurrency["cancel-in-progress"]).toBe(false);
+  });
+});
+
+// The tag job's `if` is the only thing between a workflow_run event and a release. Each
+// condition has its own test: dropping any one of them must make a test fail, not leave
+// the gate silently wider.
+describe("release.yml: which workflow_run releases", () => {
+  const good = { conclusion: "success", event: "push", headRepository: REPO };
+
+  test("a green CI run for a push to this repo's main releases", () => {
+    expect(tagIfFor("workflow_run", good)).toBe("true");
+  });
+
+  // without conclusion == 'success' a run whose CI failed or was cancelled would release
+  // a commit CI called red
+  test("a CI run that did not conclude success does not release", () => {
+    expect(tagIfFor("workflow_run", { ...good, conclusion: "failure" })).toBe("");
+    expect(tagIfFor("workflow_run", { ...good, conclusion: "cancelled" })).toBe("");
+  });
+
+  // a PR's CI fires workflow_run too (its head branch can even be named main); without
+  // event == 'push' that run would release
+  test("a CI run for something that is not a push does not release", () => {
+    expect(tagIfFor("workflow_run", { ...good, event: "pull_request" })).toBe("");
+  });
+
+  // workflow_run carries the head repository's full name; without comparing it, a green
+  // CI run on a fork's main would release here
+  test("a green CI run on a fork's main does not release", () => {
+    expect(tagIfFor("workflow_run", { ...good, headRepository: "someone/beeminder-cli" })).toBe("");
+  });
+
+  // the gate is only for workflow_run: a hand-pushed tag and a re-dispatch have no
+  // workflow_run context and must still pass
+  test("a tag push and a manual dispatch pass the gate", () => {
+    expect(tagIfFor("push")).toBe("true");
+    expect(tagIfFor("workflow_dispatch")).toBe("true");
   });
 });
 
@@ -346,12 +411,14 @@ describe("release.yml: the checked commit and the artifact are published as is",
     }
   });
 
-  test("verify has a time limit so a stuck binary does not jam main's release", () => {
-    const limit = jobs().verify!["timeout-minutes"];
+  test("every job has a time limit so a stuck step does not hold the run", () => {
+    for (const name of ["tag", "build", "verify", "publish"]) {
+      const limit = jobs()[name]!["timeout-minutes"];
 
-    expect(typeof limit).toBe("number");
-    expect(limit!).toBeGreaterThan(0);
-    expect(limit!).toBeLessThanOrEqual(30);
+      expect(typeof limit).toBe("number");
+      expect(limit!).toBeGreaterThan(0);
+      expect(limit!).toBeLessThanOrEqual(30);
+    }
   });
 
   test("the artifact has an explicit retention and verify and publish download the name build uploaded", () => {

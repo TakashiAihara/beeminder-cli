@@ -46,8 +46,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Actions are pinned by commit, not by tag (the version is a trailing comment). build and
-  # publish both run under the moved tag, so a substituted action would pass as what was
+  # Actions are pinned by commit, not by tag (the version is a trailing comment). A pushed
+  # tag can be moved before the run reads it, so a mutable action ref could be swapped under
+  # the tag the run says it is for and a substituted action would pass as what was
   # "checked" and "built". publish signs the provenance, so that substitution would be
   # signed and shipped.
   tag:
@@ -63,6 +64,9 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    # the check step runs the same checks as a CI run, so cap it the way CI's 10-minute job
+    # would: long enough for install + check, short enough that a hang does not queue main
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.decide.outputs.tag }}
       sha: ${{ steps.commit.outputs.sha }}
@@ -162,6 +166,9 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    # four cross-compiles and the binary checks, capped so a hung build does not sit in
+    # front of main's next release
+    timeout-minutes: 15
     env:
       TAG: ${{ needs.tag.outputs.tag }}
     steps:
@@ -274,6 +281,8 @@ jobs:
       id-token: write
       attestations: write
     runs-on: ubuntu-latest
+    # asset upload and API calls only; a stuck upload must not outlast this
+    timeout-minutes: 10
     env:
       TAG: ${{ needs.tag.outputs.tag }}
     steps:

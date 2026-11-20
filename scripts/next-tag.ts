@@ -8,14 +8,20 @@
  * own release candidates: the final version would read as the oldest, and the next tag
  * would reuse a number that already exists.
  *
- * Tags in neither shape are ignored rather than guessed at. With no tag at all, the first
- * release candidate is counted from the version in package.json, which is where a person
- * decides the first version: `0.1.0` gives `v0.1.0-rc.1`. Failing instead would leave every
- * main push without a release until someone cut a tag by hand.
+ * Tags in neither shape are ignored rather than guessed at. The shape is the strict one
+ * publish-release.sh releases (no leading zeros, 9 digits per number at most): counting a
+ * tag it would refuse — an over-wide number counted up and then rejected every run — would
+ * leave main releasing nothing.
+ *
+ * With no tag at all, the first release candidate is counted from the version in
+ * package.json, which is where a person decides the first version: `0.1.0` gives
+ * `v0.1.0-rc.1`. Failing instead would leave every main push without a release until
+ * someone cut a tag by hand.
  */
 type Version = readonly [major: number, minor: number, patch: number, rc: number];
 
-const SHAPE = /^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/;
+const SHAPE =
+  /^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-rc\.(0|[1-9][0-9]{0,8}))?$/;
 
 /** A final version is above every release candidate of itself, so its rc is Infinity. */
 function parse(tag: string): Version | null {

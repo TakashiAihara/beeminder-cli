@@ -6,6 +6,9 @@ import { makeSandbox, removeSandbox, type Sandbox } from "./helpers/cli.ts";
 const REPO = resolve(import.meta.dir, "../..");
 const BUILD = join(REPO, "scripts/build.ts");
 const PKG_VERSION = "7.7.7";
+// a linux-x64 binary does not run on darwin/arm64, so the target the test builds and
+// executes is derived, not fixed
+const HOST = `${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`;
 
 /**
  * scripts/build.ts is the only place RELEASE_TAG turns into a --define, and release.yml only
@@ -30,7 +33,7 @@ beforeEach(() => {
 afterEach(() => removeSandbox(sb));
 
 function build(env: Record<string, string>): void {
-  const run = Bun.spawnSync([process.execPath, BUILD, "linux-x64"], {
+  const run = Bun.spawnSync([process.execPath, BUILD, HOST], {
     cwd: sb.dir,
     env: { PATH: process.env.PATH ?? "", HOME: sb.home, ...env },
   });
@@ -39,7 +42,7 @@ function build(env: Record<string, string>): void {
 }
 
 function version(env: Record<string, string> = {}): string {
-  const run = Bun.spawnSync([join(sb.dir, "dist/beeminder-cli-linux-x64"), "--version"], {
+  const run = Bun.spawnSync([join(sb.dir, `dist/beeminder-cli-${HOST}`), "--version"], {
     env: { PATH: process.env.PATH ?? "", HOME: sb.home, ...env },
   });
   expect(run.exitCode).toBe(0);
@@ -62,8 +65,9 @@ describe("scripts/build.ts", () => {
   test("naming a target builds only that target", () => {
     build({ RELEASE_TAG: "v3.2.1-rc.4" });
 
-    expect(existsSync(join(sb.dir, "dist/beeminder-cli-linux-x64"))).toBe(true);
-    for (const target of ["linux-arm64", "darwin-x64", "darwin-arm64"]) {
+    expect(existsSync(join(sb.dir, `dist/beeminder-cli-${HOST}`))).toBe(true);
+    for (const target of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]) {
+      if (target === HOST) continue;
       expect(existsSync(join(sb.dir, `dist/beeminder-cli-${target}`))).toBe(false);
     }
   });

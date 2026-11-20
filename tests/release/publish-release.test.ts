@@ -11,8 +11,23 @@ const OTHER = "bbb  beeminder-cli-linux-x64\n";
 let sb: Sandbox;
 let calls: string;
 
+// the temp repo's commits must not see the user config: a commit.gpgsign=true there would
+// make every commit fail, and a missing user.name the opposite. Identity comes from the
+// explicit author/committer variables instead.
+const GIT_ENV = {
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@t",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@t",
+};
+
 const git = (...a: string[]) =>
-  Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: sb.dir });
+  Bun.spawnSync(["git", ...a], {
+    cwd: sb.dir,
+    env: { PATH: process.env.PATH ?? "", HOME: sb.home, ...GIT_ENV },
+  });
 
 beforeEach(() => {
   sb = makeSandbox();
@@ -76,7 +91,12 @@ esac
 afterEach(() => removeSandbox(sb));
 
 const head = () =>
-  Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: sb.dir }).stdout.toString().trim();
+  Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+    cwd: sb.dir,
+    env: { PATH: process.env.PATH ?? "", HOME: sb.home, ...GIT_ENV },
+  })
+    .stdout.toString()
+    .trim();
 
 function publish(env: Record<string, string | undefined> = {}) {
   const published = join(sb.dir, "published");
@@ -85,6 +105,7 @@ function publish(env: Record<string, string | undefined> = {}) {
     env: {
       PATH: `${join(sb.dir, "bin")}:${process.env.PATH}`,
       HOME: sb.home,
+      ...GIT_ENV,
       TAG,
       MAIN_SHA: head(),
       RELEASE_TRIGGER: "push",

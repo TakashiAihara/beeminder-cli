@@ -4,7 +4,7 @@ CLI for the [Beeminder API](https://api.beeminder.com/): read the user and goals
 
 ## Install
 
-Install a released binary with `install.sh`. It stops without installing when the checksum does not match.
+Install a released binary as `beeminder` with `install.sh`. It stops without installing when the checksum does not match.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TakashiAihara/beeminder-cli/main/install.sh | sh
@@ -73,4 +73,14 @@ beeminder add <slug> -1.5
 bun run generate          # regenerate src/generated from openapi/beeminder.yaml
 bun run check             # typecheck + lint + format:check + acceptance tests (Prism mock)
 BEEMINDER_TEST_AUTH_TOKEN=... BEEMINDER_TEST_GOAL=<slug> bun run test:integration   # real API; the goal must use aggday sum
+```
+
+## Releasing
+
+Every push to `main` whose `CI` run succeeded releases `vX.Y.Z-rc.N`, counted from the existing tags. Pushing a `v*` tag releases that tag, and a run can be dispatched again for a tag that already exists.
+
+If a run dies between creating the tag and publishing the release — a cancelled job, a lost runner — the tag is left with no release and counting skips its number. Remove it so the next run can use it:
+
+```bash
+git push --delete origin <tag>
 ```
