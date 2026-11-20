@@ -22,16 +22,21 @@ const apiBase = (): { base: string; host: string } => {
       `BEEMINDER_API_BASE must be https (http only for localhost/127.0.0.1/[::1]): ${JSON.stringify(raw)}`,
     );
   }
+  if (url.search !== "" || url.hash !== "") {
+    throw new UsageError(
+      `BEEMINDER_API_BASE must not contain a query or fragment: ${JSON.stringify(raw)}`,
+    );
+  }
   return { base: raw.replace(/\/+$/, ""), host: url.host };
 };
 
-const requestTimeoutMs = (): number => {
+export const requestTimeoutMs = (): number => {
   const raw = process.env.BEEMINDER_TIMEOUT_MS;
   if (raw === undefined || raw === "") return DEFAULT_TIMEOUT_MS;
-  const ms = Number(raw);
-  if (!Number.isFinite(ms) || ms < 0) {
+  const ms = /^[0-9]+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(ms) || ms < 1 || ms > 600_000) {
     throw new UsageError(
-      `BEEMINDER_TIMEOUT_MS is not a number of milliseconds: ${JSON.stringify(raw)}`,
+      `BEEMINDER_TIMEOUT_MS must be an integer between 1 and 600000: ${JSON.stringify(raw)}`,
     );
   }
   return ms;
@@ -46,7 +51,9 @@ export const http = async <T>(path: string, init: RequestInit): Promise<T> => {
 
   // Bearer is rejected by the API: POST/PUT carry auth_token in the JSON body,
   // GET/DELETE in the query. A bodyless POST still falls back to the query.
-  const request: RequestInit = { ...init };
+  // Redirects are never followed: the token can sit in the URL query, and a
+  // redirect is just an API error here.
+  const request: RequestInit = { ...init, redirect: "manual" };
   let url = `${base}${path}`;
   if (
     (method === "POST" || method === "PUT") &&
@@ -63,8 +70,10 @@ export const http = async <T>(path: string, init: RequestInit): Promise<T> => {
   request.signal = AbortSignal.timeout(requestTimeoutMs());
 
   let response: Response;
+  let text: string;
   try {
     response = await fetch(url, request);
+    text = await response.text();
   } catch (err) {
     throw new NetworkError(
       `cannot reach ${host}: ${err instanceof Error ? err.message : String(err)}`,
@@ -72,7 +81,6 @@ export const http = async <T>(path: string, init: RequestInit): Promise<T> => {
     );
   }
 
-  const text = await response.text();
   let data: unknown;
   try {
     data = text ? JSON.parse(text) : null;
