@@ -1,27 +1,50 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 const token = process.env.BEEMINDER_TEST_AUTH_TOKEN;
+const goal = process.env.BEEMINDER_TEST_GOAL;
+const required = process.env.BEEMINDER_REQUIRE_INTEGRATION === "1";
+const configured = Boolean(token && goal);
+
 const REPO_ROOT = new URL("../../", import.meta.url).pathname;
-const GOAL = "readbook";
 const PREFIX = "beeminder-cli-test-";
 const API = process.env.BEEMINDER_API_BASE ?? "https://www.beeminder.com/api/v1";
 
-if (!token) {
-  console.warn("BEEMINDER_TEST_AUTH_TOKEN is not set: skipping the real-API integration tests");
-}
+const TOKEN = token ?? "";
+const GOAL = goal ?? "";
 
 type Datapoint = { id: string; value: number; comment?: string; requestid?: string };
 
+if (!configured && required) {
+  test("BEEMINDER_TEST_AUTH_TOKEN and BEEMINDER_TEST_GOAL are set", () => {
+    throw new Error(
+      "BEEMINDER_REQUIRE_INTEGRATION=1 but BEEMINDER_TEST_AUTH_TOKEN or BEEMINDER_TEST_GOAL is missing",
+    );
+  });
+} else if (!configured) {
+  console.warn(
+    "BEEMINDER_TEST_AUTH_TOKEN or BEEMINDER_TEST_GOAL is not set: skipping the real-API integration tests",
+  );
+}
+
+const expectNoToken = (text: string, secret: string): void => {
+  expect(text).not.toContain(secret);
+  expect(text).not.toContain(encodeURIComponent(secret));
+};
+
+// The CLI gets the same API base as the cleanup below, so both talk to the same server.
 const cli = async (
   args: string[],
+  authToken: string = TOKEN,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? "",
+    HOME: process.env.HOME ?? "",
+    BEEMINDER_AUTH_TOKEN: authToken,
+    BEEMINDER_API_BASE: API,
+  };
   const proc = Bun.spawn([process.execPath, "src/cli.ts", ...args], {
     cwd: REPO_ROOT,
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: process.env.HOME ?? "",
-      BEEMINDER_AUTH_TOKEN: token ?? "",
-    },
+    env,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -31,26 +54,40 @@ const cli = async (
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+  expectNoToken(stdout, authToken);
+  expectNoToken(stderr, authToken);
   return { exitCode, stdout, stderr };
 };
 
 // Cleanup must not depend on the CLI under test, so it talks to the API directly.
+// path is relative to /users/me/goals/.
 const directFetch = async (method: "GET" | "DELETE", path: string): Promise<unknown> => {
-  const url = `${API}/users/me/goals/${GOAL}/${path}?auth_token=${encodeURIComponent(token ?? "")}`;
+  const url = `${API}/users/me/goals/${path}?auth_token=${encodeURIComponent(TOKEN)}`;
   const res = await fetch(url, { method });
   if (!res.ok) throw new Error(`${method} ${path} failed with HTTP ${res.status}`);
   return res.json();
 };
 
 const removeLeftovers = async (): Promise<void> => {
-  const points = (await directFetch("GET", "datapoints.json")) as Datapoint[];
+  const points = (await directFetch("GET", `${GOAL}/datapoints.json`)) as Datapoint[];
   for (const point of points) {
-    if (point.comment?.startsWith(PREFIX))
-      await directFetch("DELETE", `datapoints/${point.id}.json`);
+    if (point.comment?.startsWith(PREFIX)) {
+      await directFetch("DELETE", `${GOAL}/datapoints/${point.id}.json`);
+    }
   }
 };
 
-describe.skipIf(!token)("real Beeminder API (goal readbook)", () => {
+describe.skipIf(!configured)("real Beeminder API (goal from BEEMINDER_TEST_GOAL)", () => {
+  beforeAll(async () => {
+    const found = (await directFetch("GET", `${GOAL}.json`)) as { aggday?: string };
+    if (found.aggday !== "sum") {
+      throw new Error(
+        `goal ${GOAL} has aggday ${JSON.stringify(found.aggday)}, expected "sum": the value-0 test datapoints could otherwise change the goal's progress`,
+      );
+    }
+    await removeLeftovers();
+  });
+
   afterAll(async () => {
     await removeLeftovers();
   });
@@ -79,23 +116,15 @@ describe.skipIf(!token)("real Beeminder API (goal readbook)", () => {
     expect((JSON.parse(after.stdout) as Datapoint[]).some((p) => p.id === created.id)).toBe(false);
   });
 
-  test("an invalid token exits 2", async () => {
-    const proc = Bun.spawn([process.execPath, "src/cli.ts", "user"], {
-      cwd: REPO_ROOT,
-      env: {
-        PATH: process.env.PATH ?? "",
-        HOME: process.env.HOME ?? "",
-        BEEMINDER_AUTH_TOKEN: "not-a-real-token",
-      },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [, , exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    expect(exitCode).toBe(2);
+  test("read commands never print the token", async () => {
+    for (const args of [["user"], ["goals"], ["goal", GOAL]]) {
+      const res = await cli(args);
+      expect(res.exitCode).toBe(0);
+    }
+  });
+
+  test("an invalid token exits 2 and is not echoed", async () => {
+    const res = await cli(["user"], "not+a/real=token");
+    expect(res.exitCode).toBe(2);
   });
 });

@@ -43,17 +43,28 @@ const everyCommand: [string, string[]][] = [
 ];
 
 describe("usage errors", () => {
-  test.each(["abc", "NaN", "Infinity", "-Infinity", "1e999", "1,5"])(
-    "add rejects the non-numeric value %p with exit 3 before any request",
-    async (value) => {
-      const f = fake();
-      const res = await runCli(["add", "readbook", value], { base: f.base });
-      expect(res.exitCode).toBe(3);
-      expect(res.stdout).toBe("");
-      expect(res.stderr.trim()).not.toBe("");
-      expect(f.requests).toHaveLength(0);
-    },
-  );
+  test.each([
+    "abc",
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "1e999",
+    "1,5",
+    "0x10",
+    "1e3",
+    "0b101",
+    "1_000",
+    " 5 ",
+    "5 ",
+    "+",
+  ])("add rejects the non-numeric value %p with exit 3 before any request", async (value) => {
+    const f = fake();
+    const res = await runCli(["add", "readbook", value], { base: f.base });
+    expect(res.exitCode).toBe(3);
+    expect(res.stdout).toBe("");
+    expect(res.stderr.trim()).not.toBe("");
+    expect(f.requests).toHaveLength(0);
+  });
 
   test("add accepts a negative value after --", async () => {
     const f = fake();
@@ -131,6 +142,7 @@ describe("API errors", () => {
     const res = await runCli(args, { base: f.base });
     expect(res.exitCode).toBe(2);
     expect(res.stdout).toBe("");
+    expect(res.stderr.startsWith("HTTP 401: ")).toBe(true);
     expect(res.stderr).toContain("Token missing or incorrect token.");
     expect(f.requests).toHaveLength(1);
   });
@@ -140,14 +152,29 @@ describe("API errors", () => {
     const res = await runCli(["add", "readbook", "1", "--requestid", "r1"], { base: f.base });
     expect(res.exitCode).toBe(1);
     expect(res.stdout).toBe("");
-    expect(res.stderr).toBe("Duplicate request\n");
+    expect(res.stderr).toBe("HTTP 422: Duplicate request\n");
   });
 
   test("a 404 exits 1 and prints the errors body", async () => {
     const f = fake(() => ({ status: 404, body: { errors: "goal not found" } }));
     const res = await runCli(["goal", "nope"], { base: f.base });
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain("goal not found");
+    expect(res.stderr).toBe("HTTP 404: goal not found\n");
+  });
+
+  test("a non-string errors value is printed as JSON after the status", async () => {
+    const f = fake(() => ({ status: 422, body: { errors: { value: ["is not a number"] } } }));
+    const res = await runCli(["add", "readbook", "1"], { base: f.base });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toBe('HTTP 422: {"value":["is not a number"]}\n');
+  });
+
+  test("an empty error body prints the status alone", async () => {
+    const f = fake(() => ({ status: 503, body: null, text: "" }));
+    const res = await runCli(["user"], { base: f.base });
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout).toBe("");
+    expect(res.stderr).toBe("HTTP 503\n");
   });
 
   test("a non-JSON error body is printed verbatim and exits 1", async () => {
@@ -155,7 +182,7 @@ describe("API errors", () => {
     const res = await runCli(["user"], { base: f.base });
     expect(res.exitCode).toBe(1);
     expect(res.stdout).toBe("");
-    expect(res.stderr).toBe("boom\n");
+    expect(res.stderr).toBe("HTTP 500: boom\n");
   });
 
   test("a 401 that echoes the token back exits 2 without printing the token", async () => {

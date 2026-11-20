@@ -22,6 +22,8 @@ type RunOptions = {
   base: string;
   // null means the variable is not set at all
   token?: string | null;
+  // extra environment variables for the child, e.g. BEEMINDER_TIMEOUT_MS
+  env?: Record<string, string>;
 };
 
 // Not 127.0.0.1:0 on purpose: callers need the number before anything listens on it.
@@ -41,6 +43,7 @@ export const runCli = async (args: string[], opts: RunOptions): Promise<CliResul
   if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
   const token = opts.token === undefined ? TOKEN : opts.token;
   if (token !== null) env.BEEMINDER_AUTH_TOKEN = token;
+  Object.assign(env, opts.env);
 
   const proc = Bun.spawn([process.execPath, "src/cli.ts", ...args], {
     cwd: REPO_ROOT,
@@ -116,6 +119,15 @@ export const startFake = (reply: (req: RecordedRequest) => FakeReply = defaultRe
   return {
     base: `http://127.0.0.1:${server.port}/api/v1`,
     requests,
+    stop: () => void server.stop(true),
+  };
+};
+
+// Accepts the TCP connection and never answers, so only a client-side timeout can end the request.
+export const startHang = (): { base: string; stop: () => void } => {
+  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  return {
+    base: `http://127.0.0.1:${server.port}/api/v1`,
     stop: () => void server.stop(true),
   };
 };

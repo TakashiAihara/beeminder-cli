@@ -16,6 +16,7 @@ bun run src/cli.ts --help
 |---|---|---|
 | `BEEMINDER_AUTH_TOKEN` | personal auth token (required) | none |
 | `BEEMINDER_API_BASE` | API base URL | `https://www.beeminder.com/api/v1` |
+| `BEEMINDER_TIMEOUT_MS` | request timeout in ms | `30000` |
 
 The token is never printed and never put in argv.
 
@@ -46,5 +47,5 @@ beeminder delete <slug> <id>
 ```bash
 bun run generate          # regenerate src/generated from openapi/beeminder.yaml
 bun run check             # typecheck + lint + format:check + acceptance tests (Prism mock)
-BEEMINDER_TEST_AUTH_TOKEN=... bun run test:integration   # real API, goal `readbook`
+BEEMINDER_TEST_AUTH_TOKEN=... BEEMINDER_TEST_GOAL=<slug> bun run test:integration   # real API; the goal must use aggday sum
 ```

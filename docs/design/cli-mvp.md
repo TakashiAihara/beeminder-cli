@@ -19,7 +19,10 @@ Goal creation, goal updates and every money-charging endpoint (`x-charges-money`
 
 - Every command accepts `--user <username>`. The default is `me`, which works with a personal auth token (measured 2026-11-20).
 - stdout carries only the API response body as JSON (pretty-printed is fine). Logs and errors go to stderr.
-- `<value>` must parse as a finite number; otherwise the command fails with a usage error before any request.
+- `<value>` must be a plain decimal number (optional sign, digits, optional fraction; no hex, binary, exponent or surrounding spaces); otherwise the command fails with a usage error before any request.
+- `--daystamp` must be `YYYYMMDD` (8 digits); otherwise usage error before any request.
+- `--user`, `<slug>` and `<id>` are inserted into the URL path, so they are validated before any request: `--user` and `<slug>` must match `^[A-Za-z0-9_-]+$`, `<id>` must match `^[A-Za-z0-9]+$`. Anything else (`/`, `?`, `#`, `..`, spaces) is a usage error. Without this, a slug like `g/uncleme.json?` would reach an endpoint that charges money. The allowed characters are an assumption (the reference does not specify them); widen them only after measuring.
+- `beeminder --version` prints the version from `package.json` and exits 0.
 
 ## Configuration
 
@@ -27,9 +30,11 @@ Goal creation, goal updates and every money-charging endpoint (`x-charges-money`
 |---|---|---|
 | `BEEMINDER_AUTH_TOKEN` | personal auth token | none (required) |
 | `BEEMINDER_API_BASE` | API base URL | `https://www.beeminder.com/api/v1` |
+| `BEEMINDER_TIMEOUT_MS` | request timeout in ms | `30000` |
 
 - The token is never printed, never put in argv, and never written to stderr (also not inside error messages that echo a URL).
-- `BEEMINDER_API_BASE` exists so tests can point the CLI at a mock server; it is also usable for any compatible endpoint.
+- `BEEMINDER_API_BASE` exists so tests can point the CLI at a mock server; it is also usable for any compatible endpoint. It must be `https://`, except for `localhost` / `127.0.0.1` / `[::1]` where `http://` is allowed; anything else is a usage error (exit 3), so the token is never sent in cleartext.
+- Every request has a timeout (30 s by default; `BEEMINDER_TIMEOUT_MS` overrides it so tests can shorten it). A timeout is a network failure (exit 1) and the message names the host.
 
 ## Authentication placement
 
@@ -41,6 +46,8 @@ Measured on 2026-11-20 against a test account:
 
 So the CLI sends `auth_token` in the JSON body for POST/PUT, and as a query parameter for GET/DELETE (no body).
 
+Trade-off: for GET/DELETE the token is in the URL query, which the API server (and any TLS-terminating proxy in front of it) may log. The API offers no other way to authenticate a GET with a personal token (Bearer is rejected), so this is accepted. The token never appears in argv, stdout or stderr.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -50,7 +57,7 @@ So the CLI sends `auth_token` in the JSON body for POST/PUT, and as a query para
 | 2 | authentication: token missing (no request is sent) or API returned 401 |
 | 3 | usage error (bad arguments, non-numeric value) |
 
-On a non-2xx response the CLI writes the API's error body (`errors`) to stderr.
+On a non-2xx response the CLI writes `HTTP <status>: <errors>` to stderr, where `<errors>` is the API's `errors` value (a string verbatim, otherwise JSON). With an empty body it writes `HTTP <status>` alone. A duplicate `requestid` returns HTTP 422 `{"errors":"Duplicate request"}` (measured 2026-11-20).
 
 ## Implementation
 
@@ -62,4 +69,4 @@ On a non-2xx response the CLI writes the API's error body (`errors`) to stderr.
 
 - Acceptance tests run the CLI as a subprocess (`bun src/cli.ts ...`) and check exit code, stdout JSON and stderr.
 - Mock layer (every PR): Prism serves `openapi/beeminder.yaml` on 127.0.0.1; the CLI points at it via `BEEMINDER_API_BASE`. Prism validates the request against the spec, so a wrong body or a missing token fails the test.
-- Real-API layer (local and nightly, not per PR): runs only when `BEEMINDER_TEST_AUTH_TOKEN` is set, against the test account's goal `readbook`. It adds a datapoint with a unique `requestid` and comment prefix `beeminder-cli-test-`, reads it back, and deletes it; cleanup also removes any leftover datapoint with that comment prefix. It never calls an endpoint marked `x-charges-money`.
+- Real-API layer (local and nightly, not per PR): runs only when `BEEMINDER_TEST_AUTH_TOKEN` and `BEEMINDER_TEST_GOAL` (the goal slug) are set, against the test account; with `BEEMINDER_REQUIRE_INTEGRATION=1` a missing variable fails instead of skipping (nightly sets it). The goal's `aggday` must be `sum` (checked in `beforeAll`; otherwise the value-0 test datapoints could change the goal's progress). It adds a datapoint with a unique `requestid` and comment prefix `beeminder-cli-test-`, reads it back, and deletes it; cleanup also removes any leftover datapoint with that comment prefix. It never calls an endpoint marked `x-charges-money`.
