@@ -39,7 +39,7 @@ paths:
         Retrieves information and a list of goal slugs for the user with username `username`.
         Because an access token uniquely identifies a user, `me` may be used instead of the username.
 
-        Use `updated_at` to avoid unnecessary requests: it changes whenever the user, any of their goals, or any datapoint changes.
+        Use `updated_at` to avoid unnecessary requests: it changes whenever the user, any of their goals, or any datapoint changes. It has one-second granularity, so changes within the same second as a previous read share its value; an equal value does not prove nothing changed.
 
         The same path and method also serves "Authenticate and redirect the user": when `redirect_to_url` is given, Beeminder attempts to authenticate the user and, if successful, redirects to that URL.
       parameters:
@@ -727,7 +727,7 @@ paths:
       summary: Create a charge
       description: |
         Create a charge of a given amount (US dollars, minimum 1.00) and optionally add a note. The user is inferred from the `access_token` or `auth_token`.
-        This endpoint charges real money unless `dryrun` is passed.
+        This endpoint charges real money. Passing `dryrun` is documented to skip the charge, but this has not been measured, so do not rely on it to prevent a charge. See the `dryrun` parameter below.
 
         Path: the reference's HTTP Request line says `POST /charges` while its curl example posts to `/charges.json`. Measured unauthenticated on 2026-11-20, both paths exist (each returns 401, while an unknown path returns 404), so `/charges.json` also routes.
       x-charges-money: true
