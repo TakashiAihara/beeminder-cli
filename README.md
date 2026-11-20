@@ -33,10 +33,10 @@ beeminder add <slug> <value> [--comment <text>] [--requestid <id>] [--daystamp <
 beeminder delete <slug> <id>
 ```
 
-A negative value needs `--` before it, because `-1.5` would be parsed as an option:
+A negative value works as is:
 
 ```bash
-beeminder add <slug> -- -1.5
+beeminder add <slug> -1.5
 ```
 
 ## Exit codes

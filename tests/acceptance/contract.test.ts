@@ -176,17 +176,20 @@ describe("request timeout", () => {
 });
 
 describe("BEEMINDER_API_BASE query and fragment", () => {
-  test.each(["?x=1", "#f"])("a base ending in %p exits 3 and sends nothing", async (suffix) => {
-    const f = fake();
-    const res = await runCli(["user"], { base: `${f.base}${suffix}` });
-    expect(res.exitCode).toBe(3);
-    expect(res.stdout).toBe("");
-    expect(res.stderr).toContain("BEEMINDER_API_BASE");
-    expect(f.requests).toHaveLength(0);
-  });
+  test.each(["?x=1", "#f", "?", "#", "?#"])(
+    "a base ending in %p exits 3 and sends nothing",
+    async (suffix) => {
+      const f = fake();
+      const res = await runCli(["user"], { base: `${f.base}${suffix}` });
+      expect(res.exitCode).toBe(3);
+      expect(res.stdout).toBe("");
+      expect(res.stderr).toContain("BEEMINDER_API_BASE");
+      expect(f.requests).toHaveLength(0);
+    },
+  );
 
-  test.each(["?x=1", "#f"])(
-    "a shorter base ending in /api%s exits 3 and sends nothing",
+  test.each(["?x=1", "#f", "?", "#"])(
+    "a shorter base ending in /api%p exits 3 and sends nothing",
     async (suffix) => {
       const f = fake();
       const port = new URL(f.base).port;
