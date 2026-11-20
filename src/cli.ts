@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command, CommanderError } from "commander";
 
+import packageJson from "../package.json";
 import {
   createDatapoint,
   deleteDatapoint,
@@ -10,41 +11,66 @@ import {
   listGoals,
 } from "./generated/index.ts";
 import type { DatapointInput } from "./generated/model/index.ts";
-import { fail, reportError } from "./errors.ts";
+import { fail, redactToken, reportError } from "./errors.ts";
 
 type UserOpts = { user: string };
 type AddOpts = UserOpts & { comment?: string; requestid?: string; daystamp?: string };
 
 const respond = async (p: Promise<{ data: unknown }>): Promise<void> => {
   try {
-    process.stdout.write(`${JSON.stringify((await p).data, null, 2)}\n`);
+    process.stdout.write(`${redactToken(JSON.stringify((await p).data, null, 2))}\n`);
   } catch (err) {
     reportError(err);
   }
 };
 
+// These strings land in the request path unescaped, so they are allowlisted:
+// a slug like "g/uncleme.json?" would otherwise reach a money-charging endpoint.
+const SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
+const ID_RE = /^[A-Za-z0-9]+$/;
+const VALUE_RE = /^[+-]?\d+(\.\d+)?$/;
+const DAYSTAMP_RE = /^\d{8}$/;
+
+const check = (label: string, value: string, re: RegExp): void => {
+  if (!re.test(value)) fail(`${label} must match ${re.source}, got ${JSON.stringify(value)}`, 3);
+};
+
 const program = new Command();
 
-program.name("beeminder").description("CLI for the Beeminder API").exitOverride();
+program
+  .name("beeminder")
+  .description("CLI for the Beeminder API")
+  .version(packageJson.version)
+  .exitOverride();
 
 const withUser = (cmd: Command): Command =>
   cmd.option("--user <username>", "Beeminder username", "me");
 
-withUser(program.command("user").description("Show the user")).action((opts: UserOpts) =>
-  respond(getUser(opts.user)),
-);
+withUser(program.command("user").description("Show the user")).action((opts: UserOpts) => {
+  check("--user", opts.user, SEGMENT_RE);
+  return respond(getUser(opts.user));
+});
 
-withUser(program.command("goals").description("List goals")).action((opts: UserOpts) =>
-  respond(listGoals(opts.user)),
-);
+withUser(program.command("goals").description("List goals")).action((opts: UserOpts) => {
+  check("--user", opts.user, SEGMENT_RE);
+  return respond(listGoals(opts.user));
+});
 
 withUser(program.command("goal").description("Show one goal").argument("<slug>")).action(
-  (slug: string, opts: UserOpts) => respond(getGoal(opts.user, slug)),
+  (slug: string, opts: UserOpts) => {
+    check("--user", opts.user, SEGMENT_RE);
+    check("<slug>", slug, SEGMENT_RE);
+    return respond(getGoal(opts.user, slug));
+  },
 );
 
 withUser(
   program.command("datapoints").description("List datapoints of a goal").argument("<slug>"),
-).action((slug: string, opts: UserOpts) => respond(listDatapoints(opts.user, slug)));
+).action((slug: string, opts: UserOpts) => {
+  check("--user", opts.user, SEGMENT_RE);
+  check("<slug>", slug, SEGMENT_RE);
+  return respond(listDatapoints(opts.user, slug));
+});
 
 withUser(
   program
@@ -56,10 +82,14 @@ withUser(
     .option("--requestid <id>", "idempotency key")
     .option("--daystamp <YYYYMMDD>", "date of the datapoint"),
 ).action(async (slug: string, raw: string, opts: AddOpts) => {
+  check("--user", opts.user, SEGMENT_RE);
+  check("<slug>", slug, SEGMENT_RE);
   const value = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(value)) {
-    fail(`<value> must be a finite number, got ${JSON.stringify(raw)}`, 3);
+  if (!VALUE_RE.test(raw) || !Number.isFinite(value)) {
+    fail(`<value> must be a plain decimal number, got ${JSON.stringify(raw)}`, 3);
   }
+  if (opts.daystamp !== undefined) check("--daystamp", opts.daystamp, DAYSTAMP_RE);
+
   const input: DatapointInput = { value };
   if (opts.comment !== undefined) input.comment = opts.comment;
   if (opts.requestid !== undefined) input.requestid = opts.requestid;
@@ -69,9 +99,12 @@ withUser(
 
 withUser(
   program.command("delete").description("Delete a datapoint").argument("<slug>").argument("<id>"),
-).action((slug: string, id: string, opts: UserOpts) =>
-  respond(deleteDatapoint(opts.user, slug, id)),
-);
+).action((slug: string, id: string, opts: UserOpts) => {
+  check("--user", opts.user, SEGMENT_RE);
+  check("<slug>", slug, SEGMENT_RE);
+  check("<id>", id, ID_RE);
+  return respond(deleteDatapoint(opts.user, slug, id));
+});
 
 try {
   await program.parseAsync();
